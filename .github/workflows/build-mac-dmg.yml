@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - master
     tags:
       - 'v*'
 
@@ -31,10 +32,10 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install web dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Install Tauri v2 CLI
-        run: npm install -D @tauri-apps/cli@^2
+        run: npm install -D @tauri-apps/cli@^2 --legacy-peer-deps
 
       - name: Initialize Tauri macOS wrapper
         run: |
@@ -50,31 +51,44 @@ jobs:
 
       - name: Configure bundle identifier and window size
         run: |
-          node -e '
-            const fs = require("fs");
-            const p = "src-tauri/tauri.conf.json";
-            const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-            cfg.productName = "Fontainer";
-            cfg.identifier = "com.fontainer.app";
-            if (cfg.app && Array.isArray(cfg.app.windows) && cfg.app.windows[0]) {
-              cfg.app.windows[0].title = "Fontainer";
-              cfg.app.windows[0].width = 1360;
-              cfg.app.windows[0].height = 860;
-              cfg.app.windows[0].minWidth = 960;
-              cfg.app.windows[0].minHeight = 620;
-            }
-            fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
-          '
+          node --input-type=module << 'EOF'
+          import fs from "node:fs";
+          const path = "src-tauri/tauri.conf.json";
+          const cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+          cfg.productName = "Fontainer";
+          cfg.identifier = "com.fontainer.app";
+          if (cfg.app && Array.isArray(cfg.app.windows) && cfg.app.windows[0]) {
+            cfg.app.windows[0].title = "Fontainer";
+            cfg.app.windows[0].width = 1360;
+            cfg.app.windows[0].height = 860;
+            cfg.app.windows[0].minWidth = 960;
+            cfg.app.windows[0].minHeight = 620;
+          }
+          fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+          EOF
 
       - name: Generate macOS app icon (.icns)
         run: npx tauri icon public/pwa-512x512.png
 
-      - name: Build Universal macOS .dmg
-        run: npx tauri build --target universal-apple-darwin --bundles dmg
+      - name: Build Universal macOS .app bundle
+        run: npx tauri build --target universal-apple-darwin --bundles app
+
+      - name: Package drag-to-Applications .dmg (hdiutil)
+        run: |
+          rm -rf dmg-stage Fontainer-macOS-Universal.dmg
+          mkdir -p dmg-stage
+          cp -R "src-tauri/target/universal-apple-darwin/release/bundle/macos/Fontainer.app" dmg-stage/
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create \
+            -volname "Fontainer" \
+            -srcfolder dmg-stage \
+            -ov \
+            -format UDZO \
+            Fontainer-macOS-Universal.dmg
 
       - name: Upload Fontainer .dmg artifact
         uses: actions/upload-artifact@v4
         with:
           name: Fontainer-macOS-Universal-DMG
-          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          path: Fontainer-macOS-Universal.dmg
           if-no-files-found: error

@@ -14,7 +14,7 @@ interface InstallMacModalProps {
   onNotify: (msg: string) => void;
 }
 
-const TAURI_DMG_SNIPPET = `npm install && npm install -D @tauri-apps/cli@^2
+const TAURI_DMG_SNIPPET = `npm install --legacy-peer-deps && npm install -D @tauri-apps/cli@^2 --legacy-peer-deps
 npx tauri init --ci --app-name Fontainer \\
   --window-title Fontainer --frontend-dist ../dist \\
   --dev-url http://localhost:3000 \\
