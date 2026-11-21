@@ -14,9 +14,14 @@ interface InstallMacModalProps {
   onNotify: (msg: string) => void;
 }
 
-const TAURI_DMG_SNIPPET = `npm install -D @tauri-apps/cli
-npx tauri init --app-name Fontainer \\
-  --window-title Fontainer --dist-dir ../dist
+const TAURI_DMG_SNIPPET = `npm install && npm install -D @tauri-apps/cli@^2
+npx tauri init --ci --app-name Fontainer \\
+  --window-title Fontainer --frontend-dist ../dist \\
+  --dev-url http://localhost:3000 \\
+  --before-dev-command "npm run dev" \\
+  --before-build-command "npm run build"
+sed -i '' 's/"com.tauri.dev"/"com.fontainer.app"/' src-tauri/tauri.conf.json
+npx tauri icon public/pwa-512x512.png
 npx tauri build --bundles dmg`;
 
 export const InstallMacModal: React.FC<InstallMacModalProps> = ({
@@ -35,7 +40,7 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
     try {
       await navigator.clipboard.writeText(TAURI_DMG_SNIPPET);
       setCopiedCmd(true);
-      onNotify('Copied Tauri .dmg build commands');
+      onNotify('Copied Tauri v2 .dmg build commands');
       window.setTimeout(() => setCopiedCmd(false), 1800);
     } catch {
       onNotify('Commands ready to copy');
@@ -128,19 +133,18 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
           )}
         </section>
 
-        {/* Option 2: Native macOS .dmg via Tauri */}
+        {/* Option 2: Native macOS .dmg via GitHub Actions or Tauri v2 */}
         <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] space-y-2.5">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5 min-w-0 flex-1">
               <Terminal className="w-4 h-4 mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
               <div className="min-w-0">
                 <h3 className="font-semibold text-[13px] text-[var(--color-text-primary)]">
-                  2. Need a native macOS .dmg installer?
+                  2. Native macOS .dmg (GitHub Actions or Local Mac)
                 </h3>
                 <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
-                  Web builds cannot directly compile signed macOS <code>.dmg</code> binaries in the
-                  browser. Export this repository to your Mac and package a universal{' '}
-                  <code>.dmg</code> with Tauri:
+                  Push to GitHub and run the included <strong>Build macOS .dmg</strong> Action for a
+                  universal Apple Silicon + Intel <code>.dmg</code>, or build locally with Tauri v2:
                 </p>
               </div>
             </div>
@@ -154,7 +158,7 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
               />
             </div>
           </div>
-          <pre className="p-3 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[11px] font-code text-[var(--color-text-primary)] whitespace-pre-wrap break-words leading-relaxed select-text">
+          <pre className="p-3 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[11px] font-code text-[var(--color-text-primary)] max-h-36 overflow-auto whitespace-pre leading-relaxed select-text">
             {TAURI_DMG_SNIPPET}
           </pre>
         </section>
