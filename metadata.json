@@ -1,0 +1,6 @@
+{
+  "name": "Fontainer",
+  "description": "A native-grade macOS font manager inspired by RightFont for organizing, previewing, activating, comparing, and inspecting fonts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
