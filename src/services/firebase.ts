@@ -19,11 +19,6 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
-const googleProvider = new GoogleAuthProvider();
-for (const scope of SCOPES) {
-  googleProvider.addScope(scope);
-}
-
 // Strictly in-memory OAuth access token cache (never stored in localStorage/sessionStorage)
 let cachedDriveAccessToken: string | null = null;
 let isSigningIn = false;
@@ -140,14 +135,14 @@ export interface GoogleSignInResult {
 }
 
 export async function signInWithGoogle(
-  requestDriveConsent = true,
+  requestDriveConsent = false,
 ): Promise<GoogleSignInResult> {
   const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
   if (requestDriveConsent) {
     for (const scope of SCOPES) {
       provider.addScope(scope);
     }
-    provider.setCustomParameters({ prompt: 'select_account' });
   }
 
   try {

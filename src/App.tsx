@@ -278,7 +278,7 @@ export default function App() {
             onOpenInstall={() => setActiveModal('install-mac')}
             user={store.user}
             cloudSynced={store.cloudSynced}
-            onSignInGoogle={() => void store.signInWithGoogle()}
+            onSignInGoogle={() => void store.signInWithGoogle(false)}
             onSignOut={() => void store.signOut()}
           />
         )}
@@ -620,7 +620,7 @@ export default function App() {
           googleTotal={store.googleTotal}
           googleLoading={store.googleLoading}
           adobeKits={store.adobeKits}
-          onSignInGoogle={store.signInWithGoogle}
+          onSignInGoogle={() => store.signInWithGoogle(true)}
           onDriveTokenExpired={store.invalidateDriveToken}
           onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
           onConnectAdobeKit={store.connectAdobeKit}

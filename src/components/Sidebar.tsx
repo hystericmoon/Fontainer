@@ -534,6 +534,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <GoogleSignInButton onClick={onSignInGoogle} label="Sign in with Google" />
             </div>
           )}
+          <div className="mt-2 flex items-center justify-center gap-2 text-[10.5px] text-[var(--color-text-secondary)]">
+            <a
+              href="/privacy"
+              className="hover:text-[var(--color-text-primary)] hover:underline transition-colors"
+            >
+              Privacy Policy
+            </a>
+            <span aria-hidden="true">·</span>
+            <a
+              href="/terms"
+              className="hover:text-[var(--color-text-primary)] hover:underline transition-colors"
+            >
+              Terms
+            </a>
+          </div>
         </div>
       </div>
     </aside>

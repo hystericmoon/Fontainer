@@ -438,16 +438,20 @@ export function useFontainerStore() {
     }
   }, [fonts, selectedFontId]);
 
-  const handleSignInGoogle = useCallback(async () => {
+  const handleSignInGoogle = useCallback(async (requestDriveScope = false) => {
     try {
-      const res = await signInWithGoogle(true);
+      const res = await signInWithGoogle(requestDriveScope);
       if (res.redirected || !res.user) {
         showToast('Redirecting to Google sign-in…');
         return res;
       }
       setUser(res.user);
       setHasDriveToken(Boolean(res.accessToken));
-      showToast(`Signed in as ${res.user.displayName || res.user.email} — Cloud sync & Google Drive ready`);
+      showToast(
+        res.accessToken
+          ? `Signed in as ${res.user.displayName || res.user.email} — Cloud sync & Google Drive ready`
+          : `Signed in as ${res.user.displayName || res.user.email} — Cloud sync ready`,
+      );
       return res;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google sign-in failed';
