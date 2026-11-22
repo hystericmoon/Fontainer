@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy — Fontainer</title>
+    <meta
+      name="description"
+      content="Fontainer Privacy Policy explaining data collection, local font handling, Firebase cloud sync, AI Font Pairing, and Google Drive Limited Use compliance."
+    />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f6f6;
+        --surface: #ffffff;
+        --border: #e5e5e5;
+        --text: #111111;
+        --muted: #555555;
+        --badge-bg: #1b1b1b;
+        --badge-fg: #ffffff;
+        --code-bg: #eeeeee;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #141414;
+          --surface: #1b1b1b;
+          --border: #2c2c2c;
+          --text: #f1f1f1;
+          --muted: #a3a3a3;
+          --badge-bg: #f1f1f1;
+          --badge-fg: #111111;
+          --code-bg: #262626;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+      }
+      .header-inner {
+        max-width: 780px;
+        margin: 0 auto;
+        padding: 0 24px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      header a {
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      header a:hover, header a.active {
+        color: var(--text);
+        font-weight: 600;
+      }
+      nav { display: flex; gap: 18px; }
+      main {
+        max-width: 780px;
+        margin: 0 auto;
+        padding: 44px 24px 64px;
+      }
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
+        background: var(--badge-bg);
+        color: var(--badge-fg);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 16px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        letter-spacing: -0.02em;
+      }
+      .meta {
+        font-size: 13px;
+        color: var(--muted);
+        margin: 8px 0 32px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--border);
+      }
+      section { margin-bottom: 28px; }
+      h2 {
+        margin: 0 0 10px;
+        font-size: 17px;
+        letter-spacing: -0.01em;
+      }
+      p, li {
+        font-size: 14.5px;
+        color: var(--muted);
+      }
+      strong { color: var(--text); }
+      ul { padding-left: 20px; margin: 10px 0; }
+      li { margin-bottom: 8px; }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+        background: var(--code-bg);
+        color: var(--text);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      a { color: var(--text); }
+      footer {
+        margin-top: 44px;
+        padding-top: 20px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      footer a { color: var(--muted); text-decoration: none; margin-left: 16px; }
+      footer a:hover { color: var(--text); text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="header-inner">
+        <a href="/">← Back to Fontainer</a>
+        <nav aria-label="Legal navigation">
+          <a href="/privacy" class="active">Privacy Policy</a>
+          <a href="/terms">Terms of Service</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="brand-row">
+        <span class="logo" aria-hidden="true">F</span>
+        <div>
+          <h1>Fontainer Privacy Policy</h1>
+        </div>
+      </div>
+      <p class="meta">
+        Effective date: November 22, 2026 · Applies to the Fontainer web application (https://fontainer-alpha.vercel.app) and the Fontainer macOS desktop application.
+      </p>
+
+      <section>
+        <h2>1. Overview &amp; Local-First Design</h2>
+        <p>
+          Fontainer is a font manager for web and macOS designed around a local-first architecture. You can browse live Google Fonts, inspect OpenType features and glyphs, compare typefaces, and preview local font files without creating an account. Signing in with Google is entirely optional and is used only when you choose to sync your font lists and workspace preferences across devices or import font files from your Google Drive.
+        </p>
+      </section>
+
+      <section>
+        <h2>2. Data We Collect and How We Use It</h2>
+        <ul>
+          <li>
+            <strong>Google Account Information (Optional Sign-In):</strong> When you click <em>Sign in with Google</em>, Fontainer uses Firebase Authentication to receive your basic Google profile information (unique user ID, display name, email address, and profile avatar URL). This data is used solely to authenticate your session, identify your private cloud sync workspace, and display your signed-in account inside the app.
+          </li>
+          <li>
+            <strong>Font Workspace &amp; Organization Metadata (Optional Cloud Sync):</strong> When signed in, Fontainer saves your custom Font Lists, Smart Lists, connected Adobe Fonts Project IDs, font tags, personal usage notes, starred/activated font flags, and UI preferences (theme, preview text, font size) in a private Google Cloud Firestore database scoped strictly to your user ID so your organization stays synchronized across your devices.
+          </li>
+          <li>
+            <strong>Local &amp; Imported Font Files:</strong> Font files you drag-and-drop or import from your computer (<code>.ttf</code>, <code>.otf</code>, <code>.woff</code>, <code>.woff2</code>) are parsed locally in your browser or desktop app using OpenType.js and stored locally on your device. Fontainer never uploads your local font binaries to Fontainer servers.
+          </li>
+          <li>
+            <strong>AI Font Pairing Requests:</strong> When you explicitly click <em>Suggest Pairings</em> in the Inspector panel, Fontainer sends only the selected typeface’s non-personal metadata (font family name, classification, weight list, selected layout context such as SaaS/Editorial, and any optional project mood notes you type) to our server-side Gemini API proxy to generate complementary Google Fonts recommendations.
+          </li>
+          <li>
+            <strong>Operational Server Logs:</strong> Standard HTTP request metadata (IP address for short-lived rate limiting, requested API path, status code) may be processed transiently by our hosting provider (Vercel) to protect service availability and prevent abuse.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>3. Google Drive Data &amp; Google API Limited Use Policy</h2>
+        <p>
+          Basic <em>Sign in with Google</em> in the sidebar does <strong>not</strong> request access to Google Drive. Only if you explicitly open <em>Sources → Cloud Drives</em> and click to connect Google Drive does Fontainer request the read-only scope <code>https://www.googleapis.com/auth/drive.readonly</code>. That permission is used exclusively to:
+        </p>
+        <ul>
+          <li>List font files (<code>.ttf</code>, <code>.otf</code>, <code>.woff</code>, <code>.woff2</code>) stored in your Google Drive so you can browse and choose which ones to preview.</li>
+          <li>Download only the specific font files you select directly from Google Drive into your local browser or macOS app session for live font inspection.</li>
+        </ul>
+        <p>
+          <strong>Token &amp; Data Protection:</strong> Your Google Drive OAuth access token is held strictly in ephemeral in-memory JavaScript state for the active session and is never stored in cookies, browser localStorage, or Fontainer backend databases. Fontainer never modifies, deletes, or shares any file in your Google Drive.
+        </p>
+        <p>
+          Fontainer’s use and transfer to any other app of information received from Google APIs strictly adheres to the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer">Google API Services User Data Policy</a>,
+          including the Limited Use requirements. We do not sell Google user data, do not use it for advertising, and do not use Google Drive data or personal user data to train generalized AI/ML models.
+        </p>
+      </section>
+
+      <section>
+        <h2>4. Data Sharing &amp; Third-Party Infrastructure</h2>
+        <p>
+          Fontainer does not sell, rent, or trade your personal information. We rely on the following trusted infrastructure providers strictly to deliver app functionality:
+        </p>
+        <ul>
+          <li><strong>Google Firebase (Authentication &amp; Cloud Firestore):</strong> Optional user authentication and per-user cloud sync storage protected by strict owner-only Firestore security rules.</li>
+          <li><strong>Vercel:</strong> Web hosting and serverless API execution for Fontainer’s catalog and pairing endpoints.</li>
+          <li><strong>Google Fonts &amp; Adobe Fonts (Typekit):</strong> Live webfont directory metadata and font stylesheets loaded on demand.</li>
+          <li><strong>Google Gemini API:</strong> Server-side typographic pairing generation when explicitly requested by the user.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>5. Data Retention, Security &amp; Your Deletion Rights</h2>
+        <ul>
+          <li><strong>Local Data:</strong> You can clear local workspace preferences and imported local fonts at any time from <em>Preferences → Reset Local Workspace</em> or by clearing site storage.</li>
+          <li><strong>Revoking Google Access:</strong> You can sign out inside Fontainer at any time and revoke Fontainer’s Google permissions at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noreferrer">myaccount.google.com/permissions</a>.</li>
+          <li><strong>Account &amp; Cloud Data Deletion:</strong> Your synced Firestore records are retained only while you maintain an active workspace. To request permanent deletion of your synced cloud records and Firebase account data, email us at the contact address below and we will fulfill deletion promptly.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>6. Changes &amp; Contact Information</h2>
+        <p>
+          We may update this Privacy Policy as Fontainer evolves; any changes will be posted on this page with an updated effective date. If you have questions about this Privacy Policy, data practices, or deletion requests, please contact the developer at:
+        </p>
+        <p>
+          <strong>Email:</strong> <a href="mailto:idontwantyoutomailme@gmail.com">idontwantyoutomailme@gmail.com</a><br />
+          <strong>Website:</strong> <a href="https://fontainer-alpha.vercel.app">https://fontainer-alpha.vercel.app</a>
+        </p>
+      </section>
+
+      <footer>
+        <span>© 2026 Fontainer</span>
+        <div>
+          <a href="/">Home</a>
+          <a href="/privacy">Privacy Policy</a>
+          <a href="/terms">Terms of Service</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>

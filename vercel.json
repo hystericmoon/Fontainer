@@ -33,6 +33,10 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/healthz", "destination": "/api/index" },
+    { "source": "/privacy", "destination": "/privacy/index.html" },
+    { "source": "/privacy/", "destination": "/privacy/index.html" },
+    { "source": "/terms", "destination": "/terms/index.html" },
+    { "source": "/terms/", "destination": "/terms/index.html" },
     { "source": "/((?!api/|assets/|.*\\..*).*)", "destination": "/index.html" }
   ]
 }
