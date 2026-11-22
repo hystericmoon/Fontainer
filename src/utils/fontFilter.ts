@@ -75,8 +75,8 @@ export function matchesSmartList(font: FontFamily, smartList: SmartList): boolea
   return smartList.rules.some((rule) => evaluateSmartRule(font, rule));
 }
 
-export function isRecentFont(font: FontFamily, referenceDateIso = '2026-11-20T00:00:00Z'): boolean {
-  const refTime = new Date(referenceDateIso).getTime();
+export function isRecentFont(font: FontFamily, referenceDateIso?: string): boolean {
+  const refTime = referenceDateIso ? new Date(referenceDateIso).getTime() : Date.now();
   const addedTime = new Date(font.addedAt).getTime();
   if (Number.isNaN(addedTime) || Number.isNaN(refTime)) return false;
   const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
@@ -268,9 +268,11 @@ export function generateFontCssSnippet(font: FontFamily): string {
 
   const encoded = font.name.replace(/\s+/g, '+');
   const weights = Array.from(new Set(font.styles.map((s) => s.weight))).sort((a, b) => a - b);
-  const importLine = font.isCustomUpload
-    ? `/* Loaded locally from Fontainer Library (${font.format}) */`
-    : `@import url('https://fonts.googleapis.com/css2?family=${encoded}:wght@${weights.join(';')}&display=swap');`;
+  const importLine = font.adobeKitId
+    ? `@import url('https://use.typekit.net/${font.adobeKitId}.css');`
+    : font.isCustomUpload
+      ? `/* Loaded locally from Fontainer Library (${font.format}) */`
+      : `@import url('https://fonts.googleapis.com/css2?family=${encoded}:wght@${weights.join(';')}&display=swap');`;
 
   return `${importLine}
 

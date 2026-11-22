@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import { Plus, X } from 'lucide-react';
 import type { FontFamily, PreviewSettings } from '../types/font';
 import { buildOpenTypeFeatureSettings } from '../utils/fontFilter';
+import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
 
 interface CompareViewProps {
   allFonts: FontFamily[];
@@ -29,7 +30,17 @@ export const CompareView: React.FC<CompareViewProps> = ({
     .map((id) => allFonts.find((f) => f.id === id))
     .filter((f): f is FontFamily => Boolean(f));
 
-  const unpinnedFonts = allFonts.filter((f) => !compareIds.includes(f.id));
+  useEffect(() => {
+    for (const font of pinnedFonts) {
+      if (font.adobeKitId) {
+        ensureAdobeKitStylesheet(font.adobeKitId);
+      } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
+        ensureGoogleFontLoaded(font.name, font.styles);
+      }
+    }
+  }, [pinnedFonts]);
+
+  const unpinnedFonts = allFonts.filter((f) => !compareIds.includes(f.id)).slice(0, 200);
   const featureSettings = buildOpenTypeFeatureSettings(preview.openType);
   const specimenText = preview.text.trim() || 'Sphinx of black quartz, judge my vow — 0123456789';
 

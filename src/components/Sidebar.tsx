@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import type { User } from 'firebase/auth';
 import {
   CheckCircle2,
   Clock,
@@ -6,20 +7,25 @@ import {
   CopyCheck,
   Download,
   Folder,
+  FolderOpen,
   FolderPlus,
   Globe,
   HardDrive,
   Layers,
+  LogOut,
   MinusCircle,
   MoreHorizontal,
+  Plug,
   Plus,
   RefreshCw,
   SlidersHorizontal,
   Sparkles,
   Star,
   Trash2,
+  Type,
 } from 'lucide-react';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
+import { GoogleSignInButton } from './CloudConnectionsModal';
 
 interface SidebarProps {
   destination: SidebarDestination;
@@ -40,7 +46,7 @@ interface SidebarProps {
   duplicateCount: number;
   onOpenNewList: () => void;
   onOpenNewSmartList: () => void;
-  onOpenNewLibrary: () => void;
+  onOpenConnections: () => void;
   onOpenDuplicates: () => void;
   onOpenCompare: () => void;
   compareCount: number;
@@ -51,6 +57,10 @@ interface SidebarProps {
   onDropFontOnList: (listId: string, fontId: string) => void;
   showInstallAction?: boolean;
   onOpenInstall?: () => void;
+  user: User | null;
+  cloudSynced: boolean;
+  onSignInGoogle: () => void;
+  onSignOut: () => void;
 }
 
 function isSameDestination(a: SidebarDestination, b: SidebarDestination): boolean {
@@ -69,7 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   duplicateCount,
   onOpenNewList,
   onOpenNewSmartList,
-  onOpenNewLibrary,
+  onOpenConnections,
   onOpenDuplicates,
   onOpenCompare,
   compareCount,
@@ -80,6 +90,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDropFontOnList,
   showInstallAction = false,
   onOpenInstall,
+  user,
+  cloudSynced,
+  onSignInGoogle,
+  onSignOut,
 }) => {
   const [dragOverListId, setDragOverListId] = useState<string | null>(null);
   const [openMenuListId, setOpenMenuListId] = useState<string | null>(null);
@@ -122,10 +136,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     switch (provider) {
       case 'google':
         return <Globe className="w-3.5 h-3.5 shrink-0" />;
-      case 'icloud':
-      case 'dropbox':
       case 'adobe':
+        return <Type className="w-3.5 h-3.5 shrink-0" />;
+      case 'gdrive':
+      case 'icloud':
+      case 'box':
         return <Cloud className="w-3.5 h-3.5 shrink-0" />;
+      case 'folder':
+        return <FolderOpen className="w-3.5 h-3.5 shrink-0" />;
       default:
         return <HardDrive className="w-3.5 h-3.5 shrink-0" />;
     }
@@ -194,9 +212,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
             <button
               type="button"
-              onClick={onOpenNewLibrary}
-              aria-label="Add Font Library"
-              title="Add Font Library"
+              onClick={onOpenConnections}
+              aria-label="Connect Font Sources & Cloud Drives"
+              title="Connect Adobe Fonts, Google Drive, iCloud Drive…"
               className="p-0.5 rounded text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -417,8 +435,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </section>
       </nav>
 
-      {/* Bottom Maintenance & macOS Install Actions */}
+      {/* Bottom Connections, Maintenance & Account Sync */}
       <div className="px-2.5 py-2.5 border-t border-[var(--color-border)] space-y-1 shrink-0">
+        <button
+          type="button"
+          onClick={onOpenConnections}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[var(--color-text-primary)] bg-white/80 dark:bg-white/[0.06] border border-[var(--color-border)] hover:bg-white dark:hover:bg-white/[0.11] transition-colors cursor-pointer"
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            <Plug className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Connect Drives &amp; Adobe</span>
+          </span>
+          <span className="text-[10px] font-code text-neutral-500 dark:text-neutral-400 shrink-0">
+            Live
+          </span>
+        </button>
+
         <button
           type="button"
           onClick={onOpenDuplicates}
@@ -449,10 +481,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onOpenInstall}
-            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[var(--color-text-primary)] bg-white/80 dark:bg-white/[0.06] border border-[var(--color-border)] hover:bg-white dark:hover:bg-white/[0.11] transition-colors cursor-pointer"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] text-neutral-600 dark:text-neutral-400 hover:bg-black/[0.05] dark:hover:bg-white/[0.07] hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer"
           >
             <span className="flex items-center gap-2">
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 text-neutral-500" />
               <span>Install on Mac</span>
             </span>
             <span className="text-[10px] font-code text-neutral-500 dark:text-neutral-400">
@@ -460,6 +492,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           </button>
         )}
+
+        {/* User Account / Multi-Device Cloud Sync */}
+        <div className="pt-1.5 mt-1 border-t border-[var(--color-border)]">
+          {user ? (
+            <div className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg bg-white/70 dark:bg-white/[0.04] border border-[var(--color-border)]">
+              <div className="flex items-center gap-2 min-w-0">
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName ?? 'User avatar'}
+                    referrerPolicy="no-referrer"
+                    className="w-6 h-6 rounded-full shrink-0 object-cover"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-[#1b1b1b] dark:bg-[#f1f1f1] text-white dark:text-[#111111] flex items-center justify-center text-[11px] font-semibold shrink-0">
+                    {(user.displayName ?? user.email ?? 'U').charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="text-[11.5px] font-medium text-[var(--color-text-primary)] truncate">
+                    {user.displayName || user.email}
+                  </div>
+                  <div className="text-[10px] text-emerald-700 dark:text-emerald-400 truncate">
+                    {cloudSynced ? 'Cloud Synced' : 'Syncing…'}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onSignOut}
+                aria-label="Sign out"
+                title="Sign out"
+                className="p-1 rounded-md text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 cursor-pointer shrink-0"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              <GoogleSignInButton onClick={onSignInGoogle} label="Sign in with Google" />
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

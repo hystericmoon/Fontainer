@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   Columns2,
   Download,
   Filter,
@@ -59,6 +60,7 @@ interface ToolbarProps {
   theme: ThemeMode;
   onToggleTheme: () => void;
   onOpenImport: () => void;
+  onOpenConnections: () => void;
   onOpenQuickSwitcher: () => void;
   onOpenPreferences: () => void;
   showInstallButton?: boolean;
@@ -89,6 +91,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   theme,
   onToggleTheme,
   onOpenImport,
+  onOpenConnections,
   onOpenQuickSwitcher,
   onOpenPreferences,
   showInstallButton = false,
@@ -173,7 +176,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* Center Search Input */}
-        <div className="relative flex-1 max-w-[290px] min-w-[115px]">
+        <div className="relative flex-1 max-w-[290px] min-w-[84px]">
           <Search
             aria-hidden="true"
             className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -200,7 +203,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* Right Controls: Astryx SegmentedControl + Actions */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 xl:gap-1.5 shrink-0">
           <SegmentedControl
             label="Font View Mode"
             size="sm"
@@ -235,6 +238,17 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             {activeFilterCount > 0 && (
               <span className="font-code tabular-nums text-[11px]">({activeFilterCount})</span>
             )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenConnections}
+            aria-label="Connect Cloud Drives & Adobe Fonts"
+            title="Connect Google Drive, iCloud Drive & Adobe Fonts"
+            className="h-7 px-2 flex items-center gap-1.5 rounded-lg text-[12px] font-medium text-neutral-600 dark:text-neutral-400 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Cloud className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Sources</span>
           </button>
 
           <Button

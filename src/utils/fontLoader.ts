@@ -1,8 +1,13 @@
-import type { FontFamily, FontFormat } from '../types/font';
+import opentype from 'opentype.js';
+import type { FontClassification, FontFamily, FontFormat, FontStyleVariant } from '../types/font';
 
 const DB_NAME = 'fontainer-font-store';
 const STORE_NAME = 'uploaded-fonts';
 const DB_VERSION = 1;
+
+const FONT_FILE_RE = /\.(ttf|otf|woff2?)$/i;
+const loadedGoogleFamilies = new Set<string>();
+const loadedAdobeKits = new Set<string>();
 
 interface StoredFontBlob {
   id: string;
@@ -82,6 +87,43 @@ export async function restoreUploadedFonts(): Promise<void> {
   }
 }
 
+/** Dynamically inject a real Google Fonts CSS2 stylesheet for a visible family */
+export function ensureGoogleFontLoaded(familyName: string, styles?: FontStyleVariant[]): void {
+  if (typeof document === 'undefined' || !familyName) return;
+  const key = familyName.trim();
+  if (loadedGoogleFamilies.has(key)) return;
+  loadedGoogleFamilies.add(key);
+
+  const weights = styles && styles.length > 0
+    ? Array.from(new Set(styles.map((s) => s.weight))).sort((a, b) => a - b)
+    : [400, 700];
+  const hasItalic = styles?.some((s) => s.italic) ?? false;
+
+  const encoded = encodeURIComponent(key).replace(/%20/g, '+');
+  const query = hasItalic
+    ? `family=${encoded}:ital,wght@${weights.map((w) => `0,${w}`).concat(weights.slice(0, 3).map((w) => `1,${w}`)).join(';')}`
+    : `family=${encoded}:wght@${weights.join(';')}`;
+
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?${query}&display=swap`;
+  link.dataset.fontainerGfont = key;
+  document.head.appendChild(link);
+}
+
+/** Dynamically inject a real Adobe Fonts (Typekit) stylesheet */
+export function ensureAdobeKitStylesheet(kitId: string): void {
+  if (typeof document === 'undefined' || !/^[a-zA-Z0-9]{4,20}$/.test(kitId)) return;
+  if (loadedAdobeKits.has(kitId)) return;
+  loadedAdobeKits.add(kitId);
+
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `https://use.typekit.net/${kitId}.css`;
+  link.dataset.fontainerAdobeKit = kitId;
+  document.head.appendChild(link);
+}
+
 function inferFormat(fileName: string): FontFormat {
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.otf')) return 'OTF';
@@ -91,24 +133,128 @@ function inferFormat(fileName: string): FontFormat {
 
 function cleanFontName(fileName: string): string {
   const base = fileName.replace(/\.(ttf|otf|woff2?|ttc)$/i, '');
-  return base
-    .replace(/[-_]+/g, ' ')
-    .replace(/\b(regular|bold|italic|light|medium|semibold|variable|vf)\b/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim() || base;
+  return (
+    base
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b(regular|bold|italic|light|medium|semibold|variable|vf)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim() || base
+  );
 }
 
-export async function importLocalFontFile(
-  file: File,
+function inferClassificationFromName(name: string, isMonospace: boolean): FontClassification {
+  if (isMonospace) return 'Monospace';
+  const lower = name.toLowerCase();
+  if (lower.includes('mono') || lower.includes('code') || lower.includes('courier')) return 'Monospace';
+  if (lower.includes('slab')) return 'Slab Serif';
+  if (lower.includes('script') || lower.includes('brush') || lower.includes('callig')) return 'Script';
+  if (lower.includes('hand') || lower.includes('caveat')) return 'Handwritten';
+  if (lower.includes('serif') || lower.includes('garamond') || lower.includes('bodoni') || lower.includes('baskerville') || lower.includes('times')) {
+    return 'Serif';
+  }
+  if (lower.includes('display') || lower.includes('poster') || lower.includes('condensed')) return 'Display';
+  return 'Sans Serif';
+}
+
+function readNameEntry(
+  names: opentype.FontNames | undefined,
+  key: string,
+): string {
+  const map = names as Record<string, unknown> | undefined;
+  const entry = map?.[key];
+  if (!entry || typeof entry !== 'object') return '';
+  const record = entry as Record<string, string>;
+  return (record.en || Object.values(record)[0] || '').trim();
+}
+
+export async function parseAndLoadFontBuffer(
+  buffer: ArrayBuffer,
+  fileName: string,
   targetLibraryId: string,
+  options?: {
+    sourceLabel?: string;
+    sourcePath?: string;
+    extraTags?: string[];
+  },
 ): Promise<FontFamily> {
-  const buffer = await file.arrayBuffer();
-  const familyName = cleanFontName(file.name);
-  const format = inferFormat(file.name);
-  const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const format = inferFormat(fileName);
+  const id = `font-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+  let familyName = cleanFontName(fileName);
+  let styleName = /italic/i.test(fileName) ? 'Italic' : 'Regular';
+  let weight = /bold/i.test(fileName) ? 700 : /light/i.test(fileName) ? 300 : /medium/i.test(fileName) ? 500 : 400;
+  let italic = /italic/i.test(fileName);
+  let foundry = options?.sourceLabel || 'Local Font File';
+  let designer = 'Embedded OpenType Metadata';
+  let license = 'User Licensed Font';
+  let version = '1.000';
+  let postScriptName = `${familyName.replace(/\s+/g, '')}-${styleName}`;
+  let isVariable = /variable|vf/i.test(fileName);
+  let openTypeFeatures: string[] = [];
+  let customGlyphs: string[] | undefined;
+  let isMonospace = false;
+
+  // Parse real OpenType/TrueType binary tables via opentype.js (for .ttf, .otf, .woff)
+  if (!fileName.toLowerCase().endsWith('.woff2')) {
+    try {
+      const parsed = opentype.parse(buffer.slice(0));
+      const names = parsed.names;
+      const prefFamily = readNameEntry(names, 'preferredFamily') || readNameEntry(names, 'fontFamily');
+      const prefSub = readNameEntry(names, 'preferredSubfamily') || readNameEntry(names, 'fontSubfamily');
+      const mfg = readNameEntry(names, 'manufacturer');
+      const des = readNameEntry(names, 'designer');
+      const lic = readNameEntry(names, 'license') || readNameEntry(names, 'copyright');
+      const ver = readNameEntry(names, 'version');
+      const ps = readNameEntry(names, 'postScriptName');
+
+      if (prefFamily) familyName = prefFamily;
+      if (prefSub) styleName = prefSub;
+      if (mfg) foundry = mfg;
+      if (des) designer = des;
+      if (lic) license = lic.slice(0, 96);
+      if (ver) version = ver.replace(/^Version\s+/i, '').split(';')[0].trim() || version;
+      if (ps) postScriptName = ps;
+
+      const os2 = parsed.tables?.os2 as { usWeightClass?: number; fsSelection?: number } | undefined;
+      if (os2?.usWeightClass) weight = os2.usWeightClass;
+      if (os2?.fsSelection && (os2.fsSelection & 1) === 1) italic = true;
+
+      const post = parsed.tables?.post as { isFixedPitch?: number } | undefined;
+      if (post?.isFixedPitch) isMonospace = true;
+
+      if (parsed.tables && 'fvar' in parsed.tables && parsed.tables.fvar) {
+        isVariable = true;
+      }
+
+      const gsub = parsed.tables?.gsub as { features?: Array<{ tag: string }> } | undefined;
+      if (gsub?.features?.length) {
+        openTypeFeatures = Array.from(new Set(gsub.features.map((f) => f.tag))).slice(0, 16);
+      }
+
+      // Extract real printable Unicode glyphs directly from the font's cmap
+      const glyphs: string[] = [];
+      const seen = new Set<number>();
+      const total = Math.min(parsed.glyphs.length, 600);
+      for (let i = 0; i < total && glyphs.length < 180; i++) {
+        const g = parsed.glyphs.get(i);
+        if (g.unicode && g.unicode >= 33 && g.unicode <= 0x26ff && !seen.has(g.unicode)) {
+          seen.add(g.unicode);
+          glyphs.push(String.fromCodePoint(g.unicode));
+        }
+      }
+      if (glyphs.length > 10) {
+        customGlyphs = glyphs;
+      }
+    } catch {
+      // Fall back to filename metadata if binary table is non-standard
+    }
+  }
 
   if (typeof FontFace !== 'undefined') {
-    const face = new FontFace(familyName, buffer);
+    const face = new FontFace(familyName, buffer.slice(0), {
+      weight: String(weight),
+      style: italic ? 'italic' : 'normal',
+    });
     const loaded = await face.load();
     document.fonts.add(loaded);
   }
@@ -117,43 +263,211 @@ export async function importLocalFontFile(
     id,
     familyName,
     buffer,
-    fileName: file.name,
+    fileName,
   });
 
-  const fileSizeKb = Math.max(12, Math.round(file.size / 1024));
-  const psName = familyName.replace(/\s+/g, '');
+  const fileSizeKb = Math.max(8, Math.round(buffer.byteLength / 1024));
+  const classification = inferClassificationFromName(familyName, isMonospace);
 
   return {
     id,
     name: familyName,
-    cssFamily: `'${familyName}', sans-serif`,
-    foundry: 'Local Import',
-    designer: 'Imported Font File',
-    classification: 'Sans Serif',
-    format,
-    width: 'Normal',
-    isVariable: /variable|vf/i.test(file.name),
-    license: 'Local User License',
-    version: '1.000',
+    cssFamily: `'${familyName}', ${classification === 'Serif' ? 'serif' : classification === 'Monospace' ? 'monospace' : 'sans-serif'}`,
+    foundry,
+    designer,
+    classification,
+    format: isVariable ? 'Variable' : format,
+    width: /condensed|narrow/i.test(familyName) ? 'Condensed' : /expanded|wide/i.test(familyName) ? 'Expanded' : 'Normal',
+    isVariable,
+    license,
+    version,
     languages: ['Latin'],
-    openTypeFeatures: ['liga', 'tnum'],
+    openTypeFeatures: openTypeFeatures.length > 0 ? openTypeFeatures : ['liga', 'kern'],
     libraryId: targetLibraryId,
     addedAt: new Date().toISOString(),
     starred: false,
     activated: true,
-    tags: ['imported', format.toLowerCase()],
-    notes: `Imported from ${file.name}`,
+    tags: Array.from(new Set([format.toLowerCase(), ...(options?.extraTags ?? [])])),
+    notes: options?.sourcePath ? `Loaded from ${options.sourcePath}` : `Imported from ${fileName}`,
     isCustomUpload: true,
+    sourcePath: options?.sourcePath || fileName,
+    customGlyphs,
     styles: [
       {
-        id: `${id}-400`,
-        name: 'Regular',
-        weight: 400,
-        italic: /italic/i.test(file.name),
-        postScriptName: `${psName}-Regular`,
+        id: `${id}-${weight}${italic ? 'i' : ''}`,
+        name: styleName,
+        weight,
+        italic,
+        postScriptName,
         activated: true,
         fileSizeKb,
       },
     ],
   };
+}
+
+export async function importLocalFontFile(
+  file: File,
+  targetLibraryId: string,
+  sourcePath?: string,
+): Promise<FontFamily> {
+  const buffer = await file.arrayBuffer();
+  return parseAndLoadFontBuffer(buffer, file.name, targetLibraryId, {
+    sourceLabel: 'Local Import',
+    sourcePath: sourcePath || file.name,
+    extraTags: ['local'],
+  });
+}
+
+/** Real Local Font Access API (macOS / Windows Chrome & Edge) */
+export async function scanSystemLocalFonts(targetLibraryId: string): Promise<FontFamily[]> {
+  const win = window as unknown as {
+    queryLocalFonts?: () => Promise<
+      Array<{
+        family: string;
+        fullName: string;
+        postscriptName: string;
+        style: string;
+      }>
+    >;
+  };
+
+  if (typeof win.queryLocalFonts !== 'function') {
+    throw new Error(
+      'Local Font Access API requires Chromium-based browsers (Chrome, Edge, Brave, Arc) on desktop.',
+    );
+  }
+
+  const localFonts = await win.queryLocalFonts();
+  const grouped = new Map<
+    string,
+    Array<{ fullName: string; postscriptName: string; style: string }>
+  >();
+
+  for (const lf of localFonts) {
+    if (!lf.family || lf.family.startsWith('.')) continue;
+    const list = grouped.get(lf.family) ?? [];
+    list.push({
+      fullName: lf.fullName,
+      postscriptName: lf.postscriptName,
+      style: lf.style,
+    });
+    grouped.set(lf.family, list);
+  }
+
+  const now = new Date().toISOString();
+  const families: FontFamily[] = [];
+
+  for (const [family, entries] of grouped.entries()) {
+    const slug = `sys-${family.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+    const classification = inferClassificationFromName(family, false);
+    const styles: FontStyleVariant[] = entries.map((e, idx) => {
+      const s = e.style.toLowerCase();
+      const weight = s.includes('thin')
+        ? 100
+        : s.includes('extralight')
+          ? 200
+          : s.includes('light')
+            ? 300
+            : s.includes('medium')
+              ? 500
+              : s.includes('semibold') || s.includes('demi')
+                ? 600
+                : s.includes('extrabold') || s.includes('heavy')
+                  ? 800
+                  : s.includes('black')
+                    ? 900
+                    : s.includes('bold')
+                      ? 700
+                      : 400;
+      const italic = s.includes('italic') || s.includes('oblique');
+      return {
+        id: `${slug}-${idx}`,
+        name: e.style || 'Regular',
+        weight,
+        italic,
+        postScriptName: e.postscriptName || `${family.replace(/\s+/g, '')}-${e.style}`,
+        activated: true,
+        fileSizeKb: 0,
+      };
+    });
+
+    families.push({
+      id: slug,
+      name: family,
+      cssFamily: `'${family}', ${classification === 'Serif' ? 'serif' : classification === 'Monospace' ? 'monospace' : 'sans-serif'}`,
+      foundry: 'Installed System Font',
+      designer: 'macOS / OS System Catalog',
+      classification,
+      format: 'OTF',
+      width: /condensed|narrow/i.test(family) ? 'Condensed' : /expanded/i.test(family) ? 'Expanded' : 'Normal',
+      isVariable: false,
+      license: 'Installed OS / Local License',
+      version: 'System',
+      languages: ['Latin'],
+      openTypeFeatures: ['liga', 'kern'],
+      libraryId: targetLibraryId,
+      addedAt: now,
+      starred: false,
+      activated: true,
+      tags: ['system'],
+      notes: `Detected via Local Font Access API (${entries.length} installed faces).`,
+      styles,
+    });
+  }
+
+  return families.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Real File System Access API folder scanner (works with iCloud Drive, Box Drive, ~/Library/Fonts) */
+export async function scanLocalDirectoryFonts(
+  targetLibraryId: string,
+  sourceLabel: string,
+  maxFiles = 120,
+): Promise<{ folderName: string; fonts: FontFamily[] }> {
+  const win = window as unknown as {
+    showDirectoryPicker?: (opts?: { mode?: 'read' }) => Promise<FileSystemDirectoryHandle>;
+  };
+
+  if (typeof win.showDirectoryPicker !== 'function') {
+    throw new Error(
+      'Direct folder scanning requires Chrome, Edge, Brave, or Arc. You can still drag-and-drop font files or click + Import.',
+    );
+  }
+
+  const dirHandle = await win.showDirectoryPicker({ mode: 'read' });
+  const collected: Array<{ file: File; relPath: string }> = [];
+
+  async function walk(handle: FileSystemDirectoryHandle, prefix: string) {
+    if (collected.length >= maxFiles) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for await (const [name, entry] of (handle as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
+      if (collected.length >= maxFiles) break;
+      if (entry.kind === 'file' && FONT_FILE_RE.test(name)) {
+        const file = await (entry as FileSystemFileHandle).getFile();
+        collected.push({ file, relPath: prefix ? `${prefix}/${name}` : name });
+      } else if (entry.kind === 'directory' && !name.startsWith('.')) {
+        await walk(entry as FileSystemDirectoryHandle, prefix ? `${prefix}/${name}` : name);
+      }
+    }
+  }
+
+  await walk(dirHandle, dirHandle.name);
+
+  const fonts: FontFamily[] = [];
+  for (const item of collected) {
+    try {
+      const buf = await item.file.arrayBuffer();
+      const loaded = await parseAndLoadFontBuffer(buf, item.file.name, targetLibraryId, {
+        sourceLabel,
+        sourcePath: item.relPath,
+        extraTags: [sourceLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-')],
+      });
+      fonts.push(loaded);
+    } catch {
+      // skip unreadable font file
+    }
+  }
+
+  return { folderName: dirHandle.name, fonts };
 }

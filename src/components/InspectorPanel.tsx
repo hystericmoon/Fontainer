@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
 import { Switch } from '@astryxdesign/core/Switch';
@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Grid3X3,
   Info,
+  Layers,
   Plus,
   RotateCcw,
   Sliders,
@@ -20,21 +21,28 @@ import type {
   FontFamily,
   OpenTypeState,
   PreviewSettings,
+  ThemeMode,
 } from '../types/font';
 import {
   buildOpenTypeFeatureSettings,
   formatFileSize,
   generateFontCssSnippet,
 } from '../utils/fontFilter';
+import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
+import { FontPairingAssistant } from './FontPairingAssistant';
 
 interface InspectorPanelProps {
   font: FontFamily | null;
+  allFonts: FontFamily[];
   libraryName: string;
   preview: PreviewSettings;
+  theme: ThemeMode;
   appIntegrations: AppIntegration[];
   onUpdatePreview: (patch: Partial<PreviewSettings>) => void;
   onUpdateOpenType: (patch: Partial<OpenTypeState>) => void;
   onToggleActivate: (fontId: string) => void;
+  onSelectFont: (fontId: string) => void;
+  onComparePair: (primaryFontId: string, secondaryFontId: string) => void;
   onAddTag: (fontId: string, tag: string) => void;
   onRemoveTag: (fontId: string, tag: string) => void;
   onUpdateNotes: (fontId: string, notes: string) => void;
@@ -43,7 +51,7 @@ interface InspectorPanelProps {
   onNotify: (msg: string) => void;
 }
 
-type InspectorTab = 'preview' | 'info' | 'glyphs' | 'apps';
+type InspectorTab = 'info' | 'pair' | 'preview' | 'glyphs' | 'apps';
 
 const GLYPH_SETS: Record<string, string[]> = {
   'Basic Latin': Array.from(
@@ -75,12 +83,16 @@ const OPENTYPE_CONTROLS: Array<{ key: keyof OpenTypeState; code: string; label: 
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   font,
+  allFonts,
   libraryName,
   preview,
+  theme,
   appIntegrations,
   onUpdatePreview,
   onUpdateOpenType,
   onToggleActivate,
+  onSelectFont,
+  onComparePair,
   onAddTag,
   onRemoveTag,
   onUpdateNotes,
@@ -94,6 +106,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [selectedGlyph, setSelectedGlyph] = useState<string>('&');
   const [copiedCss, setCopiedCss] = useState(false);
 
+  useEffect(() => {
+    if (!font) return;
+    if (font.adobeKitId) {
+      ensureAdobeKitStylesheet(font.adobeKitId);
+    } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
+      ensureGoogleFontLoaded(font.name, font.styles);
+    }
+  }, [font]);
+
+  const glyphSets = useMemo(() => {
+    if (font?.customGlyphs && font.customGlyphs.length > 0) {
+      return {
+        'Embedded OpenType Glyphs': font.customGlyphs,
+        ...GLYPH_SETS,
+      };
+    }
+    return GLYPH_SETS;
+  }, [font?.customGlyphs]);
+
+  const activeGlyphCategory = glyphSets[glyphCategory] ? glyphCategory : Object.keys(glyphSets)[0];
+
   const totalSizeKb = useMemo(
     () => (font ? font.styles.reduce((acc, s) => acc + s.fileSizeKb, 0) : 0),
     [font],
@@ -103,9 +136,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     return (
       <aside
         aria-label="Font Inspector"
-        className="w-[310px] shrink-0 h-full border-l border-[var(--color-border)] bg-[#F1F1F1] dark:bg-[#1B1B1B] flex items-center justify-center p-6 text-center text-[13px] text-neutral-500"
+        className="w-[348px] shrink-0 h-full border-l border-[var(--color-border)] bg-[#F1F1F1] dark:bg-[#1B1B1B] flex items-center justify-center p-6 text-center text-[13px] text-neutral-500"
       >
-        Select a font family to inspect metadata, OpenType features, and glyphs.
+        Select a font family to inspect metadata, AI pairings, OpenType features, and glyphs.
       </aside>
     );
   }
@@ -149,15 +182,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   const tabs: Array<{ id: InspectorTab; label: string; icon: React.ReactNode }> = [
     { id: 'info', label: 'Info', icon: <Info className="w-3.5 h-3.5" /> },
-    { id: 'preview', label: 'Styling', icon: <Sliders className="w-3.5 h-3.5" /> },
+    { id: 'pair', label: 'Pair', icon: <Sparkles className="w-3.5 h-3.5" /> },
+    { id: 'preview', label: 'Style', icon: <Sliders className="w-3.5 h-3.5" /> },
     { id: 'glyphs', label: 'Glyphs', icon: <Grid3X3 className="w-3.5 h-3.5" /> },
-    { id: 'apps', label: 'Apps', icon: <Sparkles className="w-3.5 h-3.5" /> },
+    { id: 'apps', label: 'Apps', icon: <Layers className="w-3.5 h-3.5" /> },
   ];
 
   return (
     <aside
       aria-label="Font Inspector"
-      className="w-[310px] shrink-0 h-full flex flex-col border-l border-[var(--color-border)] bg-[#F1F1F1] dark:bg-[#1B1B1B] select-none"
+      className="w-[348px] shrink-0 h-full flex flex-col border-l border-[var(--color-border)] bg-[#F1F1F1] dark:bg-[#1B1B1B] select-none"
     >
       {/* Selected Font Header */}
       <div className="px-4 py-3 border-b border-[var(--color-border)] bg-white dark:bg-[#262626] shrink-0">
@@ -191,7 +225,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 key={t.id}
                 value={t.id}
                 label={t.label}
-                icon={t.icon}
               />
             ))}
           </SegmentedControl>
@@ -322,6 +355,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               />
             </section>
           </>
+        )}
+
+        {tab === 'pair' && (
+          <FontPairingAssistant
+            font={font}
+            allFonts={allFonts}
+            preview={preview}
+            theme={theme}
+            onSelectFont={onSelectFont}
+            onComparePair={onComparePair}
+            onToggleActivate={onToggleActivate}
+            onNotify={onNotify}
+          />
         )}
 
         {tab === 'preview' && (
@@ -529,13 +575,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <span className="sr-only">Glyph Category</span>
               <select
                 aria-label="Glyph Category"
-                value={glyphCategory}
+                value={activeGlyphCategory}
                 onChange={(e) => setGlyphCategory(e.target.value)}
                 className="w-full h-8 px-2.5 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] text-[12px] text-[var(--color-text-primary)] outline-none cursor-pointer"
               >
-                {Object.keys(GLYPH_SETS).map((cat) => (
+                {Object.keys(glyphSets).map((cat) => (
                   <option key={cat} value={cat}>
-                    {cat} ({GLYPH_SETS[cat].length})
+                    {cat} ({glyphSets[cat].length})
                   </option>
                 ))}
               </select>
@@ -547,7 +593,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               aria-label="Character Map"
               className="grid grid-cols-6 gap-1"
             >
-              {(GLYPH_SETS[glyphCategory] ?? []).map((char, idx) => {
+              {(glyphSets[activeGlyphCategory] ?? []).map((char, idx) => {
                 const isSelected = selectedGlyph === char;
                 return (
                   <button

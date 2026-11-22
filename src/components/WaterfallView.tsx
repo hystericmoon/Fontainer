@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import type { FontFamily, PreviewSettings } from '../types/font';
 import { buildOpenTypeFeatureSettings } from '../utils/fontFilter';
+import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
 
 interface WaterfallViewProps {
   fonts: FontFamily[];
@@ -22,6 +23,15 @@ export const WaterfallView: React.FC<WaterfallViewProps> = ({
 }) => {
   const activeFont = selectedFont ?? fonts[0] ?? null;
   const [selectedStyleIdx, setSelectedStyleIdx] = useState(0);
+
+  useEffect(() => {
+    if (!activeFont) return;
+    if (activeFont.adobeKitId) {
+      ensureAdobeKitStylesheet(activeFont.adobeKitId);
+    } else if (!activeFont.isCustomUpload && activeFont.libraryId === 'lib-google') {
+      ensureGoogleFontLoaded(activeFont.name, activeFont.styles);
+    }
+  }, [activeFont]);
 
   if (!activeFont) return null;
 

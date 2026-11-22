@@ -1,8 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Theme } from '@astryxdesign/core';
 import { Button } from '@astryxdesign/core/Button';
-import { CheckCircle2, FolderPlus, MinusCircle, RotateCcw, Upload, WifiOff, X } from 'lucide-react';
+import {
+  CheckCircle2,
+  Cloud,
+  FolderPlus,
+  Loader2,
+  MinusCircle,
+  RefreshCw,
+  RotateCcw,
+  Upload,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import { defaultThemeSlug, themes } from './astryx-themes';
+import { CloudConnectionsModal } from './components/CloudConnectionsModal';
 import { CompareView } from './components/CompareView';
 import { FilterBar } from './components/FilterBar';
 import { FontGrid } from './components/FontGrid';
@@ -10,7 +22,6 @@ import { FontRow } from './components/FontRow';
 import { InspectorPanel } from './components/InspectorPanel';
 import { InstallMacModal } from './components/InstallMacModal';
 import {
-  AddLibraryModal,
   DuplicateFinderModal,
   ImportFontsModal,
   NewFontListModal,
@@ -23,18 +34,21 @@ import { Toolbar } from './components/Toolbar';
 import { WaterfallView } from './components/WaterfallView';
 import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
-import { countActiveFilterFacets, DEFAULT_FILTER_STATE } from './utils/fontFilter';
+import { countActiveFilterFacets } from './utils/fontFilter';
 
 type ActiveModal =
   | null
   | 'new-list'
   | 'new-smart'
-  | 'new-library'
+  | 'connections'
   | 'import'
   | 'preferences'
   | 'duplicates'
   | 'quick-switcher'
   | 'install-mac';
+
+const INITIAL_BATCH_SIZE = 60;
+const BATCH_STEP = 60;
 
 export default function App() {
   const store = useFontainerStore();
@@ -47,8 +61,119 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [batchListMenuOpen, setBatchListMenuOpen] = useState(false);
   const [fileDropOverlay, setFileDropOverlay] = useState(false);
+  const [expandedFamilyIds, setExpandedFamilyIds] = useState<Record<string, boolean>>({});
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_BATCH_SIZE);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const dragDepthRef = useRef(0);
+  const dragWatchdogRef = useRef<number | null>(null);
+  const importLocalFontsRef = useRef(store.importLocalFonts);
+  importLocalFontsRef.current = store.importLocalFonts;
+
+  // Bulletproof global file drag-and-drop overlay (never sticks when leaving window/iframe)
+  useEffect(() => {
+    const clearOverlay = () => {
+      dragDepthRef.current = 0;
+      if (dragWatchdogRef.current !== null) {
+        window.clearTimeout(dragWatchdogRef.current);
+        dragWatchdogRef.current = null;
+      }
+      setFileDropOverlay(false);
+    };
+
+    const bumpWatchdog = () => {
+      if (dragWatchdogRef.current !== null) {
+        window.clearTimeout(dragWatchdogRef.current);
+      }
+      // dragover fires ~every 50ms while hovering; if cursor leaves iframe without firing dragleave, auto-dismiss
+      dragWatchdogRef.current = window.setTimeout(clearOverlay, 350);
+    };
+
+    const hasFiles = (e: DragEvent) =>
+      Boolean(e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files'));
+
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepthRef.current += 1;
+      setFileDropOverlay(true);
+      bumpWatchdog();
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setFileDropOverlay(true);
+      bumpWatchdog();
+    };
+
+    const onDragLeave = (e: DragEvent) => {
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (
+        dragDepthRef.current === 0 ||
+        e.relatedTarget === null ||
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        clearOverlay();
+      }
+    };
+
+    const onDrop = (e: DragEvent) => {
+      const files = e.dataTransfer?.files;
+      clearOverlay();
+      if (files && files.length > 0) {
+        e.preventDefault();
+        void importLocalFontsRef.current(files);
+      }
+    };
+
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    window.addEventListener('dragend', clearOverlay);
+    window.addEventListener('blur', clearOverlay);
+    window.addEventListener('pointerdown', clearOverlay);
+    document.addEventListener('visibilitychange', clearOverlay);
+
+    return () => {
+      clearOverlay();
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragend', clearOverlay);
+      window.removeEventListener('blur', clearOverlay);
+      window.removeEventListener('pointerdown', clearOverlay);
+      document.removeEventListener('visibilitychange', clearOverlay);
+    };
+  }, []);
+
+  // Reset pagination batch whenever destination, view mode, or filter changes
+  useEffect(() => {
+    setVisibleLimit(INITIAL_BATCH_SIZE);
+  }, [store.destination, store.filters, store.viewMode]);
+
+  // Progressive infinite scroll for 1,700+ live fonts
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') return;
+    if (visibleLimit >= store.visibleFonts.length) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisibleLimit((prev) => Math.min(prev + BATCH_STEP, store.visibleFonts.length));
+        }
+      },
+      { rootMargin: '320px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visibleLimit, store.visibleFonts.length]);
 
   // macOS keyboard shortcuts: ⌘F Search, ⌘, Preferences, ⌘I Inspector, Esc close modals
   useEffect(() => {
@@ -64,6 +189,7 @@ export default function App() {
         setInspectorOpen((v) => !v);
       } else if (e.key === 'Escape') {
         setActiveModal(null);
+        setFileDropOverlay(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -100,6 +226,16 @@ export default function App() {
 
   const activeFilterCount = useMemo(() => countActiveFilterFacets(store.filters), [store.filters]);
 
+  const renderedFonts = useMemo(
+    () => store.visibleFonts.slice(0, visibleLimit),
+    [store.visibleFonts, visibleLimit],
+  );
+  const hasMoreFonts = visibleLimit < store.visibleFonts.length;
+
+  const toggleExpandFamily = (fontId: string) => {
+    setExpandedFamilyIds((prev) => ({ ...prev, [fontId]: !prev[fontId] }));
+  };
+
   const canvasBgClass =
     store.theme === 'sepia'
       ? 'bg-[#F8F5EE] text-[#1C1917]'
@@ -116,38 +252,20 @@ export default function App() {
 
   return (
     <Theme theme={themes[defaultThemeSlug]} mode={store.theme === 'dark' ? 'dark' : 'light'}>
-      <div
-        className="h-screen w-screen overflow-hidden flex bg-[#FFFFFF] dark:bg-[#1B1B1B] text-[var(--color-text-primary)] relative"
-        onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('Files')) {
-            e.preventDefault();
-            setFileDropOverlay(true);
-          }
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget === e.target) setFileDropOverlay(false);
-        }}
-        onDrop={(e) => {
-          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            e.preventDefault();
-            setFileDropOverlay(false);
-            void store.importFiles(e.dataTransfer.files);
-          }
-        }}
-      >
+      <div className="h-screen w-screen overflow-hidden flex bg-[#FFFFFF] dark:bg-[#1B1B1B] text-[var(--color-text-primary)] relative">
         {/* Left Sidebar */}
         {sidebarOpen && (
           <Sidebar
             destination={store.destination}
-            onSelect={store.navigateTo}
+            onSelect={store.navigate}
             libraries={store.libraries}
             fontLists={store.fontLists}
             smartLists={store.smartLists}
-            counts={store.counts}
+            counts={store.sidebarCounts}
             duplicateCount={store.duplicateGroups.length}
             onOpenNewList={() => setActiveModal('new-list')}
             onOpenNewSmartList={() => setActiveModal('new-smart')}
-            onOpenNewLibrary={() => setActiveModal('new-library')}
+            onOpenConnections={() => setActiveModal('connections')}
             onOpenDuplicates={() => setActiveModal('duplicates')}
             onOpenCompare={() => store.setViewMode('compare')}
             compareCount={store.compareIds.length}
@@ -158,6 +276,10 @@ export default function App() {
             onDropFontOnList={(listId, fontId) => store.addFontsToList(listId, [fontId])}
             showInstallAction={!pwa.isInstalled}
             onOpenInstall={() => setActiveModal('install-mac')}
+            user={store.user}
+            cloudSynced={store.cloudSynced}
+            onSignInGoogle={() => void store.signInWithGoogle()}
+            onSignOut={() => void store.signOut()}
           />
         )}
 
@@ -176,7 +298,7 @@ export default function App() {
 
           <Toolbar
             title={currentTitle}
-            resultCount={store.filteredFonts.length}
+            resultCount={store.visibleFonts.length}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             inspectorOpen={inspectorOpen}
@@ -191,12 +313,13 @@ export default function App() {
             activeFilterCount={activeFilterCount}
             onToggleFilterBar={() => setFilterBarOpen((v) => !v)}
             filters={store.filters}
-            onUpdateFilters={(patch) => store.setFilters((prev) => ({ ...prev, ...patch }))}
+            onUpdateFilters={store.updateFilters}
             preview={store.preview}
-            onUpdatePreview={(patch) => store.setPreview((prev) => ({ ...prev, ...patch }))}
+            onUpdatePreview={store.updatePreview}
             theme={store.theme}
             onToggleTheme={() => store.setTheme(store.theme === 'dark' ? 'light' : 'dark')}
             onOpenImport={() => setActiveModal('import')}
+            onOpenConnections={() => setActiveModal('connections')}
             onOpenQuickSwitcher={() => setActiveModal('quick-switcher')}
             onOpenPreferences={() => setActiveModal('preferences')}
             showInstallButton={!pwa.isInstalled}
@@ -208,7 +331,7 @@ export default function App() {
           {filterBarOpen && (
             <FilterBar
               filters={store.filters}
-              onUpdate={(patch) => store.setFilters((prev) => ({ ...prev, ...patch }))}
+              onUpdate={store.updateFilters}
               activeCount={activeFilterCount}
             />
           )}
@@ -228,14 +351,14 @@ export default function App() {
                   size="sm"
                   label="Activate"
                   icon={<CheckCircle2 className="w-3.5 h-3.5" />}
-                  onClick={() => store.setBatchActivation(store.checkedFontIds, true)}
+                  onClick={() => store.batchSetActivation(store.checkedFontIds, true)}
                 />
                 <Button
                   variant="secondary"
                   size="sm"
                   label="Deactivate"
                   icon={<MinusCircle className="w-3.5 h-3.5" />}
-                  onClick={() => store.setBatchActivation(store.checkedFontIds, false)}
+                  onClick={() => store.batchSetActivation(store.checkedFontIds, false)}
                 />
 
                 <div className="relative">
@@ -248,19 +371,23 @@ export default function App() {
                   />
                   {batchListMenuOpen && (
                     <div className="absolute left-0 top-9 z-30 w-44 py-1 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] shadow-lg">
-                      {store.fontLists.map((list) => (
-                        <button
-                          key={list.id}
-                          type="button"
-                          onClick={() => {
-                            store.addFontsToList(list.id, store.checkedFontIds);
-                            setBatchListMenuOpen(false);
-                          }}
-                          className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] cursor-pointer"
-                        >
-                          {list.name}
-                        </button>
-                      ))}
+                      {store.fontLists.length === 0 ? (
+                        <div className="px-3 py-1.5 text-neutral-400">No lists yet</div>
+                      ) : (
+                        store.fontLists.map((list) => (
+                          <button
+                            key={list.id}
+                            type="button"
+                            onClick={() => {
+                              store.addFontsToList(list.id, store.checkedFontIds);
+                              setBatchListMenuOpen(false);
+                            }}
+                            className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] cursor-pointer"
+                          >
+                            {list.name}
+                          </button>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -268,7 +395,7 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => store.setCheckedFontIds([])}
+                onClick={store.clearCheckedFonts}
                 aria-label="Clear selection"
                 className="text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-white flex items-center gap-1 cursor-pointer"
               >
@@ -289,29 +416,59 @@ export default function App() {
                   allFonts={store.fonts}
                   compareIds={store.compareIds}
                   preview={store.preview}
-                  onToggleCompare={store.toggleCompareFont}
+                  onToggleCompare={store.toggleCompare}
                   onSelectFont={store.setSelectedFontId}
                 />
-              ) : store.filteredFonts.length === 0 ? (
+              ) : store.googleLoading && store.fonts.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center p-10 text-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-neutral-400 mb-3" />
+                  <p className="text-[14px] font-semibold text-[var(--color-text-primary)]">
+                    Loading live Google Fonts directory…
+                  </p>
+                  <p className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-1">
+                    Connecting to live font catalog — zero placeholder data.
+                  </p>
+                </div>
+              ) : store.visibleFonts.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center p-10 text-center">
                   <p className="text-[15px] font-semibold text-[var(--color-text-primary)]">
-                    No matching fonts found
+                    {store.googleError && store.fonts.length === 0
+                      ? 'Could not reach live Google Fonts catalog'
+                      : 'No fonts in this view yet'}
                   </p>
-                  <p className="text-[13px] text-neutral-500 dark:text-neutral-400 mt-1 max-w-sm">
-                    {store.filters.search || activeFilterCount > 0
-                      ? 'Try clearing your search query or resetting active facet filters.'
-                      : 'This collection is currently empty. Drag fonts here or import local font files.'}
+                  <p className="text-[13px] text-neutral-500 dark:text-neutral-400 mt-1 max-w-md">
+                    {store.googleError && store.fonts.length === 0
+                      ? store.googleError
+                      : store.filters.search || activeFilterCount > 0
+                        ? 'Try clearing your search query or resetting active facet filters.'
+                        : 'Connect Adobe Fonts, Google Drive, iCloud Drive, or import local .ttf/.otf/.woff2 files.'}
                   </p>
-                  <div className="mt-4 flex items-center gap-2">
+                  <div className="mt-4 flex items-center gap-2 flex-wrap justify-center">
+                    {store.googleError && store.fonts.length === 0 && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        label="Retry Google Fonts"
+                        icon={<RefreshCw className="w-3.5 h-3.5" />}
+                        onClick={() => void store.refreshGoogleFonts(false)}
+                      />
+                    )}
                     {(store.filters.search || activeFilterCount > 0) && (
                       <Button
                         variant="primary"
                         size="sm"
                         label="Clear Filters"
                         icon={<RotateCcw className="w-3.5 h-3.5" />}
-                        onClick={() => store.setFilters(DEFAULT_FILTER_STATE)}
+                        onClick={store.resetFilters}
                       />
                     )}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      label="Connect Drives & Adobe"
+                      icon={<Cloud className="w-3.5 h-3.5" />}
+                      onClick={() => setActiveModal('connections')}
+                    />
                     <Button
                       variant="secondary"
                       size="sm"
@@ -323,26 +480,49 @@ export default function App() {
                 </div>
               ) : store.viewMode === 'waterfall' ? (
                 <WaterfallView
-                  fonts={store.filteredFonts}
+                  fonts={renderedFonts}
                   selectedFont={store.selectedFont}
                   preview={store.preview}
                   onSelectFont={store.setSelectedFontId}
                   onToggleActivate={store.toggleFontActivation}
                 />
               ) : store.viewMode === 'grid' ? (
-                <FontGrid
-                  fonts={store.filteredFonts}
-                  selectedFontId={store.selectedFont?.id ?? ''}
-                  preview={store.preview}
-                  compareIds={store.compareIds}
-                  onSelectFont={store.setSelectedFontId}
-                  onToggleActivate={store.toggleFontActivation}
-                  onToggleStar={store.toggleStar}
-                  onToggleCompare={store.toggleCompareFont}
-                />
+                <>
+                  <FontGrid
+                    fonts={renderedFonts}
+                    selectedFontId={store.selectedFont?.id ?? ''}
+                    preview={store.preview}
+                    compareIds={store.compareIds}
+                    onSelectFont={store.setSelectedFontId}
+                    onToggleActivate={store.toggleFontActivation}
+                    onToggleStar={store.toggleStar}
+                    onToggleCompare={store.toggleCompare}
+                  />
+                  {hasMoreFonts && (
+                    <div
+                      ref={loadMoreRef}
+                      className="px-5 py-6 flex items-center justify-center gap-3 text-[12px] text-neutral-500"
+                    >
+                      <span className="font-code tabular-nums">
+                        Showing {renderedFonts.length.toLocaleString()} of{' '}
+                        {store.visibleFonts.length.toLocaleString()} families
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        label="Load More"
+                        onClick={() =>
+                          setVisibleLimit((prev) =>
+                            Math.min(prev + BATCH_STEP, store.visibleFonts.length),
+                          )
+                        }
+                      />
+                    </div>
+                  )}
+                </>
               ) : (
                 <div data-testid="font-list">
-                  {store.filteredFonts.map((font) => (
+                  {renderedFonts.map((font) => (
                     <FontRow
                       key={font.id}
                       font={font}
@@ -350,21 +530,44 @@ export default function App() {
                       preview={store.preview}
                       selected={store.selectedFont?.id === font.id}
                       checked={store.checkedFontIds.includes(font.id)}
-                      expanded={Boolean(store.expandedFamilyIds[font.id])}
+                      expanded={Boolean(expandedFamilyIds[font.id])}
                       inCompare={store.compareIds.includes(font.id)}
                       fontLists={store.fontLists}
                       onSelect={() => store.setSelectedFontId(font.id)}
                       onToggleCheck={() => store.toggleCheckedFont(font.id)}
-                      onToggleExpand={() => store.toggleExpandFamily(font.id)}
+                      onToggleExpand={() => toggleExpandFamily(font.id)}
                       onToggleActivate={() => store.toggleFontActivation(font.id)}
                       onToggleStyleActivate={(styleId) => store.toggleStyleActivation(font.id, styleId)}
                       onToggleStar={() => store.toggleStar(font.id)}
-                      onToggleCompare={() => store.toggleCompareFont(font.id)}
+                      onToggleCompare={() => store.toggleCompare(font.id)}
                       onAddToList={(listId) => store.addFontsToList(listId, [font.id])}
-                      onRemoveFont={font.isCustomUpload ? () => store.removeFont(font.id) : undefined}
+                      onRemoveFont={
+                        font.isCustomUpload ? () => store.removeFontFamily(font.id) : undefined
+                      }
                       onCopyCss={(snippet) => void handleCopyCss(snippet)}
                     />
                   ))}
+                  {hasMoreFonts && (
+                    <div
+                      ref={loadMoreRef}
+                      className="px-4 py-6 flex items-center justify-center gap-3 text-[12px] text-neutral-500 border-b border-[var(--color-border)]"
+                    >
+                      <span className="font-code tabular-nums">
+                        Showing {renderedFonts.length.toLocaleString()} of{' '}
+                        {store.visibleFonts.length.toLocaleString()} families
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        label="Load More"
+                        onClick={() =>
+                          setVisibleLimit((prev) =>
+                            Math.min(prev + BATCH_STEP, store.visibleFonts.length),
+                          )
+                        }
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </main>
@@ -373,19 +576,18 @@ export default function App() {
             {inspectorOpen && (
               <InspectorPanel
                 font={store.selectedFont}
+                allFonts={store.fonts}
                 libraryName={
                   store.selectedFont ? libraryMap[store.selectedFont.libraryId] ?? 'Library' : ''
                 }
                 preview={store.preview}
+                theme={store.theme}
                 appIntegrations={store.appIntegrations}
-                onUpdatePreview={(patch) => store.setPreview((prev) => ({ ...prev, ...patch }))}
-                onUpdateOpenType={(patch) =>
-                  store.setPreview((prev) => ({
-                    ...prev,
-                    openType: { ...prev.openType, ...patch },
-                  }))
-                }
+                onUpdatePreview={store.updatePreview}
+                onUpdateOpenType={store.updateOpenType}
                 onToggleActivate={store.toggleFontActivation}
+                onSelectFont={store.setSelectedFontId}
+                onComparePair={store.compareFontPair}
                 onAddTag={store.addTagToFont}
                 onRemoveTag={store.removeTagFromFont}
                 onUpdateNotes={store.updateFontNotes}
@@ -410,7 +612,28 @@ export default function App() {
           </div>
         )}
 
-        {/* Modals */}
+        {/* Production Cloud & Foundry Connections Hub */}
+        <CloudConnectionsModal
+          isOpen={activeModal === 'connections'}
+          user={store.user}
+          hasDriveToken={store.hasDriveToken}
+          googleTotal={store.googleTotal}
+          googleLoading={store.googleLoading}
+          adobeKits={store.adobeKits}
+          onSignInGoogle={store.signInWithGoogle}
+          onDriveTokenExpired={store.invalidateDriveToken}
+          onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
+          onConnectAdobeKit={store.connectAdobeKit}
+          onRemoveAdobeKit={store.removeAdobeKit}
+          onImportGoogleDriveFiles={store.importGoogleDriveFiles}
+          onScanSystemFonts={store.scanSystemFonts}
+          onConnectLocalFolder={store.connectLocalFolder}
+          onOpenFileUpload={() => setActiveModal('import')}
+          onClose={() => setActiveModal(null)}
+          onNotify={store.showToast}
+        />
+
+        {/* Workspace Modals */}
         {activeModal === 'new-list' && (
           <NewFontListModal
             onClose={() => setActiveModal(null)}
@@ -426,18 +649,11 @@ export default function App() {
           />
         )}
 
-        {activeModal === 'new-library' && (
-          <AddLibraryModal
-            onClose={() => setActiveModal(null)}
-            onAdd={store.addLibrary}
-          />
-        )}
-
         {activeModal === 'import' && (
           <ImportFontsModal
             libraries={store.libraries}
             onClose={() => setActiveModal(null)}
-            onImport={store.importFiles}
+            onImport={store.importLocalFonts}
           />
         )}
 
@@ -457,7 +673,7 @@ export default function App() {
             groups={store.duplicateGroups}
             libraries={store.libraries}
             onDeactivate={store.toggleFontActivation}
-            onRemove={store.removeFont}
+            onRemove={store.removeFontFamily}
             onClose={() => setActiveModal(null)}
           />
         )}
@@ -468,7 +684,7 @@ export default function App() {
             onToggleActivate={store.toggleFontActivation}
             onSelectFont={(id) => {
               store.setSelectedFontId(id);
-              store.navigateTo({ type: 'all' });
+              store.navigate({ type: 'all' });
             }}
             onClose={() => setActiveModal(null)}
           />
@@ -486,13 +702,13 @@ export default function App() {
         />
 
         {/* Subtle macOS HUD Toast */}
-        {store.toastMessage && (
+        {store.toast && (
           <div
             role="status"
             aria-live="polite"
             className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-[#1b1b1b] dark:bg-[#f1f1f1] text-white dark:text-[#111111] text-[12px] font-medium shadow-lg pointer-events-none"
           >
-            {store.toastMessage}
+            {store.toast}
           </div>
         )}
       </div>

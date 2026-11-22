@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Switch } from '@astryxdesign/core/Switch';
 import {
   Check,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { FontFamily, FontList, PreviewSettings } from '../types/font';
 import { buildOpenTypeFeatureSettings, generateFontCssSnippet } from '../utils/fontFilter';
+import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
 
 interface FontRowProps {
   font: FontFamily;
@@ -55,6 +56,34 @@ export const FontRow: React.FC<FontRowProps> = ({
   onCopyCss,
 }) => {
   const [listMenuOpen, setListMenuOpen] = useState(false);
+  const rowRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const loadFace = () => {
+      if (font.adobeKitId) {
+        ensureAdobeKitStylesheet(font.adobeKitId);
+      } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
+        ensureGoogleFontLoaded(font.name, font.styles);
+      }
+    };
+
+    const el = rowRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      loadFace();
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          loadFace();
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px 0px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [font.adobeKitId, font.isCustomUpload, font.libraryId, font.name, font.styles]);
 
   const featureSettings = buildOpenTypeFeatureSettings(preview.openType);
   const specimenText = preview.text.trim() || font.name;
@@ -73,6 +102,7 @@ export const FontRow: React.FC<FontRowProps> = ({
 
   return (
     <article
+      ref={rowRef}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/fontainer-font-id', font.id);
@@ -260,8 +290,8 @@ export const FontRow: React.FC<FontRowProps> = ({
         <div
           className={`w-full overflow-hidden text-ellipsis whitespace-nowrap transition-opacity ${
             font.activated
-              ? 'text-neutral-900 dark:text-neutral-100'
-              : 'text-neutral-400 dark:text-neutral-500'
+              ? 'text-neutral-950 dark:text-neutral-50'
+              : 'text-neutral-600 dark:text-neutral-400'
           }`}
           style={specimenStyle}
         >

@@ -1,0 +1,285 @@
+{
+  "entities": {
+    "UserWorkspace": {
+      "title": "UserWorkspace",
+      "description": "Private workspace settings and profile metadata owned by a single authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["light", "dark", "sepia"]
+        },
+        "previewText": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "previewFontSize": {
+          "type": "number"
+        },
+        "compareIds": {
+          "type": "array",
+          "description": "Up to 12 pinned font IDs in the comparison tray."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "theme", "createdAt", "updatedAt"]
+    },
+    "FontLibraryDoc": {
+      "title": "FontLibraryDoc",
+      "description": "A real connected font source (Google Fonts, Adobe Fonts, Google Drive, iCloud/Box/Local folder).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["local", "google", "adobe", "gdrive", "icloud", "box", "folder"]
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "remoteId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "autoSync": {
+          "type": "boolean"
+        },
+        "syncedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "name", "provider", "path", "autoSync", "createdAt", "updatedAt"]
+    },
+    "FontListDoc": {
+      "title": "FontListDoc",
+      "description": "A user-defined Font List folder grouping font family IDs.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "color": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 16,
+          "pattern": "^#[0-9a-fA-F]{3,8}$"
+        },
+        "fontIds": {
+          "type": "array",
+          "description": "Up to 500 font family IDs in this list."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "name", "color", "fontIds", "createdAt", "updatedAt"]
+    },
+    "SmartListDoc": {
+      "title": "SmartListDoc",
+      "description": "Rule-driven dynamic Smart List owned by the user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "matchMode": {
+          "type": "string",
+          "enum": ["all", "any"]
+        },
+        "rules": {
+          "type": "array",
+          "description": "Up to 20 structured filter rules."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "name", "matchMode", "rules", "createdAt", "updatedAt"]
+    },
+    "FontUserMetaDoc": {
+      "title": "FontUserMetaDoc",
+      "description": "Per-user metadata overrides (starred, activated, tags, notes) for any catalog, Adobe, Drive, or local font.",
+      "type": "object",
+      "properties": {
+        "fontId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "starred": {
+          "type": "boolean"
+        },
+        "activated": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Up to 20 user tags."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["fontId", "ownerId", "starred", "activated", "tags", "notes", "createdAt", "updatedAt"]
+    },
+    "AdobeKitDoc": {
+      "title": "AdobeKitDoc",
+      "description": "User-connected Adobe Fonts (Typekit) Web Project ID.",
+      "type": "object",
+      "properties": {
+        "kitId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 24,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "familyCount": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["kitId", "ownerId", "name", "familyCount", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserWorkspace" },
+      "description": "Private workspace profile and preferences strictly owned by {userId}."
+    },
+    "/users/{userId}/libraries/{libraryId}": {
+      "schema": { "$ref": "#/entities/FontLibraryDoc" },
+      "description": "Connected cloud and local font libraries belonging to {userId}."
+    },
+    "/users/{userId}/fontLists/{listId}": {
+      "schema": { "$ref": "#/entities/FontListDoc" },
+      "description": "Custom Font Lists belonging to {userId}."
+    },
+    "/users/{userId}/smartLists/{smartListId}": {
+      "schema": { "$ref": "#/entities/SmartListDoc" },
+      "description": "Rule-driven Smart Lists belonging to {userId}."
+    },
+    "/users/{userId}/fontMeta/{fontId}": {
+      "schema": { "$ref": "#/entities/FontUserMetaDoc" },
+      "description": "Per-user font tags, notes, starred, and activation state for {userId}."
+    },
+    "/users/{userId}/adobeKits/{kitId}": {
+      "schema": { "$ref": "#/entities/AdobeKitDoc" },
+      "description": "Connected Adobe Fonts (Typekit) web project IDs for {userId}."
+    }
+  }
+}

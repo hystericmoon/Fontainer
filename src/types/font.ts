@@ -21,6 +21,15 @@ export type TextAlignMode = 'left' | 'center' | 'right';
 
 export type SortOption = 'name-asc' | 'name-desc' | 'styles-desc' | 'recent';
 
+export type LibraryProvider =
+  | 'local'
+  | 'google'
+  | 'adobe'
+  | 'gdrive'
+  | 'icloud'
+  | 'box'
+  | 'folder';
+
 export type SidebarDestination =
   | { type: 'all' }
   | { type: 'activated' }
@@ -33,8 +42,8 @@ export type SidebarDestination =
 
 export interface FontStyleVariant {
   id: string;
-  name: string; // e.g., "Regular", "SemiBold", "Italic"
-  weight: number; // 100 - 900
+  name: string;
+  weight: number;
   italic: boolean;
   postScriptName: string;
   activated: boolean;
@@ -56,29 +65,39 @@ export interface FontFamily {
   languages: string[];
   openTypeFeatures: string[];
   libraryId: string;
-  addedAt: string; // ISO date string
+  addedAt: string;
   starred: boolean;
   activated: boolean;
   tags: string[];
   notes: string;
   isCustomUpload?: boolean;
   googleFontUrl?: string;
+  adobeKitId?: string;
+  sourcePath?: string;
+  customGlyphs?: string[];
   styles: FontStyleVariant[];
 }
 
 export interface FontLibrary {
   id: string;
   name: string;
-  provider: 'local' | 'google' | 'icloud' | 'dropbox' | 'adobe';
+  provider: LibraryProvider;
   path: string;
+  remoteId?: string;
   syncedAt: string;
   autoSync: boolean;
+}
+
+export interface AdobeKitRecord {
+  kitId: string;
+  name: string;
+  familyCount: number;
 }
 
 export interface FontList {
   id: string;
   name: string;
-  color: string; // macOS folder tint hex
+  color: string;
   fontIds: string[];
   createdAt: string;
 }
@@ -133,7 +152,7 @@ export interface PreviewSettings {
   text: string;
   fontSize: number;
   lineHeight: number;
-  letterSpacing: number; // em
+  letterSpacing: number;
   textCase: TextCaseMode;
   textAlign: TextAlignMode;
   foregroundColor: string;

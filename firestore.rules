@@ -1,0 +1,380 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function parentWorkspaceExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // --- Validation Blueprints (Anti-Update-Gap) ---
+
+    function isValidUserWorkspace(data, userId) {
+      return data.keys().hasAll(['uid', 'theme', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'theme',
+          'previewText',
+          'previewFontSize',
+          'compareIds',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && data.theme is string
+        && data.theme in ['light', 'dark', 'sepia']
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
+        && (!('previewText' in data) || (data.previewText is string && data.previewText.size() <= 300))
+        && (!('previewFontSize' in data) || (data.previewFontSize is number && data.previewFontSize >= 12 && data.previewFontSize <= 120))
+        && (!('compareIds' in data) || (
+          data.compareIds is list
+          && data.compareIds.size() <= 12
+          && (data.compareIds.size() == 0 || (data.compareIds[0] is string && data.compareIds[0].size() <= 128))
+        ))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFontLibrary(data, userId, libraryId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'provider', 'path', 'autoSync', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'name',
+          'provider',
+          'path',
+          'remoteId',
+          'autoSync',
+          'syncedAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == libraryId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.provider is string
+        && data.provider in ['local', 'google', 'adobe', 'gdrive', 'icloud', 'box', 'folder']
+        && data.path is string
+        && data.path.size() <= 512
+        && (!('remoteId' in data) || (data.remoteId is string && data.remoteId.size() <= 256))
+        && data.autoSync is bool
+        && (!('syncedAt' in data) || (data.syncedAt is string && data.syncedAt.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFontList(data, userId, listId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'color', 'fontIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'name', 'color', 'fontIds', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == listId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.color is string
+        && data.color.size() >= 4
+        && data.color.size() <= 16
+        && data.color.matches('^#[0-9a-fA-F]{3,8}$')
+        && data.fontIds is list
+        && data.fontIds.size() <= 500
+        && (data.fontIds.size() == 0 || (data.fontIds[0] is string && data.fontIds[0].size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSmartList(data, userId, smartListId) {
+      return data.keys().hasAll(['id', 'ownerId', 'name', 'matchMode', 'rules', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'name', 'matchMode', 'rules', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.id == smartListId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.matchMode is string
+        && data.matchMode in ['all', 'any']
+        && data.rules is list
+        && data.rules.size() <= 20
+        && (data.rules.size() == 0 || data.rules[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFontUserMeta(data, userId, fontId) {
+      return data.keys().hasAll(['fontId', 'ownerId', 'starred', 'activated', 'tags', 'notes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['fontId', 'ownerId', 'starred', 'activated', 'tags', 'notes', 'createdAt', 'updatedAt'])
+        && isValidId(data.fontId)
+        && data.fontId == fontId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.starred is bool
+        && data.activated is bool
+        && data.tags is list
+        && data.tags.size() <= 20
+        && (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 64))
+        && data.notes is string
+        && data.notes.size() <= 2000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdobeKit(data, userId, kitId) {
+      return data.keys().hasAll(['kitId', 'ownerId', 'name', 'familyCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['kitId', 'ownerId', 'name', 'familyCount', 'createdAt', 'updatedAt'])
+        && isValidId(data.kitId)
+        && data.kitId.size() >= 4
+        && data.kitId.size() <= 24
+        && data.kitId == kitId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.familyCount is number
+        && data.familyCount >= 0
+        && data.familyCount <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserWorkspace(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserWorkspace(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Update Preferences & Preview
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'theme', 'previewText', 'previewFontSize', 'compareIds', 'updatedAt'])
+        );
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(userId);
+
+      // Subcollection: Connected Font Libraries
+      match /libraries/{libraryId} {
+        allow get: if isValidId(userId) && isValidId(libraryId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(libraryId)
+          && isValidFontLibrary(incoming(), userId, libraryId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentWorkspaceExists(userId);
+
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(libraryId)
+          && isValidFontLibrary(incoming(), userId, libraryId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Sync or Rename Library
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'path', 'remoteId', 'autoSync', 'syncedAt', 'updatedAt'])
+          )
+          && parentWorkspaceExists(userId);
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(libraryId)
+          && parentWorkspaceExists(userId);
+      }
+
+      // Subcollection: Custom Font Lists
+      match /fontLists/{listId} {
+        allow get: if isValidId(userId) && isValidId(listId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(listId)
+          && isValidFontList(incoming(), userId, listId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentWorkspaceExists(userId);
+
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(listId)
+          && isValidFontList(incoming(), userId, listId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Update List Name/Color/Members
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color', 'fontIds', 'updatedAt'])
+          )
+          && parentWorkspaceExists(userId);
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(listId)
+          && parentWorkspaceExists(userId);
+      }
+
+      // Subcollection: Smart Lists
+      match /smartLists/{smartListId} {
+        allow get: if isValidId(userId) && isValidId(smartListId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(smartListId)
+          && isValidSmartList(incoming(), userId, smartListId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentWorkspaceExists(userId);
+
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(smartListId)
+          && isValidSmartList(incoming(), userId, smartListId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Edit Smart List Rules
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'matchMode', 'rules', 'updatedAt'])
+          )
+          && parentWorkspaceExists(userId);
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(smartListId)
+          && parentWorkspaceExists(userId);
+      }
+
+      // Subcollection: Per-User Font Metadata (Starred, Activated, Tags, Notes)
+      match /fontMeta/{fontId} {
+        allow get: if isValidId(userId) && isValidId(fontId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(fontId)
+          && isValidFontUserMeta(incoming(), userId, fontId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentWorkspaceExists(userId);
+
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(fontId)
+          && isValidFontUserMeta(incoming(), userId, fontId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().fontId == existing().fontId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Update User Font Metadata
+            incoming().diff(existing()).affectedKeys().hasOnly(['starred', 'activated', 'tags', 'notes', 'updatedAt'])
+          )
+          && parentWorkspaceExists(userId);
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(fontId)
+          && parentWorkspaceExists(userId);
+      }
+
+      // Subcollection: Connected Adobe Fonts (Typekit) Web Projects
+      match /adobeKits/{kitId} {
+        allow get: if isValidId(userId) && isValidId(kitId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(kitId)
+          && isValidAdobeKit(incoming(), userId, kitId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && parentWorkspaceExists(userId);
+
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(kitId)
+          && isValidAdobeKit(incoming(), userId, kitId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().kitId == existing().kitId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action: Refresh Kit Metadata
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'familyCount', 'updatedAt'])
+          )
+          && parentWorkspaceExists(userId);
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(kitId)
+          && parentWorkspaceExists(userId);
+      }
+    }
+  }
+}

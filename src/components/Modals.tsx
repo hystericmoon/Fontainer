@@ -390,8 +390,8 @@ export const AddLibraryModal: React.FC<{
             className="w-full h-8 px-2 rounded-lg bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] text-[13px] outline-none"
           >
             <option value="local">Local macOS Folder</option>
+            <option value="gdrive">Google Drive</option>
             <option value="icloud">iCloud Drive</option>
-            <option value="dropbox">Dropbox</option>
             <option value="google">Google Fonts</option>
             <option value="adobe">Adobe Creative Cloud</option>
           </select>
