@@ -441,6 +441,10 @@ export function useFontainerStore() {
   const handleSignInGoogle = useCallback(async () => {
     try {
       const res = await signInWithGoogle(true);
+      if (res.redirected || !res.user) {
+        showToast('Redirecting to Google sign-in…');
+        return res;
+      }
       setUser(res.user);
       setHasDriveToken(Boolean(res.accessToken));
       showToast(`Signed in as ${res.user.displayName || res.user.email} — Cloud sync & Google Drive ready`);

@@ -1,9 +1,11 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -25,6 +27,7 @@ for (const scope of SCOPES) {
 // Strictly in-memory OAuth access token cache (never stored in localStorage/sessionStorage)
 let cachedDriveAccessToken: string | null = null;
 let isSigningIn = false;
+let redirectResultChecked = false;
 
 export enum OperationType {
   CREATE = 'create',
@@ -91,9 +94,33 @@ if (import.meta.env.DEV) {
   void testConnection();
 }
 
+function isTopLevelWindow(): boolean {
+  try {
+    return window.self === window.top;
+  } catch {
+    return false;
+  }
+}
+
 export function subscribeAuth(
   onUserChange: (user: User | null, hasDriveToken: boolean) => void,
 ) {
+  if (!redirectResultChecked) {
+    redirectResultChecked = true;
+    void getRedirectResult(auth)
+      .then((result) => {
+        if (!result) return;
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedDriveAccessToken = credential.accessToken;
+        }
+        onUserChange(result.user, Boolean(cachedDriveAccessToken));
+      })
+      .catch(() => {
+        // Ignore stale or missing redirect state
+      });
+  }
+
   return onAuthStateChanged(auth, (user) => {
     if (!user) {
       cachedDriveAccessToken = null;
@@ -106,24 +133,60 @@ export function subscribeAuth(
   });
 }
 
+export interface GoogleSignInResult {
+  user: User | null;
+  accessToken: string | null;
+  redirected?: boolean;
+}
+
 export async function signInWithGoogle(
   requestDriveConsent = true,
-): Promise<{ user: User; accessToken: string | null }> {
+): Promise<GoogleSignInResult> {
+  const provider = new GoogleAuthProvider();
+  if (requestDriveConsent) {
+    for (const scope of SCOPES) {
+      provider.addScope(scope);
+    }
+    provider.setCustomParameters({ prompt: 'select_account' });
+  }
+
   try {
     isSigningIn = true;
-    const provider = new GoogleAuthProvider();
-    if (requestDriveConsent) {
-      for (const scope of SCOPES) {
-        provider.addScope(scope);
-      }
-      provider.setCustomParameters({ prompt: 'select_account' });
-    }
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (credential?.accessToken) {
       cachedDriveAccessToken = credential.accessToken;
     }
     return { user: result.user, accessToken: cachedDriveAccessToken };
+  } catch (err) {
+    const code = (err as { code?: string })?.code ?? '';
+
+    if (
+      code === 'auth/popup-blocked' ||
+      code === 'auth/operation-not-supported-in-this-environment'
+    ) {
+      // Automatically fall back to redirect sign-in on top-level tabs when popups are blocked
+      if (isTopLevelWindow()) {
+        await signInWithRedirect(auth, provider);
+        return { user: null, accessToken: null, redirected: true };
+      }
+      throw new Error(
+        'Pop-up was blocked by your browser. Allow pop-ups for this site and click Sign in with Google again.',
+      );
+    }
+
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      throw new Error('Google sign-in was cancelled.');
+    }
+
+    if (code === 'auth/unauthorized-domain') {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      throw new Error(
+        `Domain "${host}" is not authorized in Firebase Console → Authentication → Settings → Authorized domains.`,
+      );
+    }
+
+    throw err;
   } finally {
     isSigningIn = false;
   }

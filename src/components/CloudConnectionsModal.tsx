@@ -147,7 +147,10 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
     try {
       let token = getGoogleDriveAccessToken();
       if (!token) {
-        await onSignInGoogle();
+        const res = (await onSignInGoogle()) as { redirected?: boolean } | undefined;
+        if (res?.redirected) {
+          return;
+        }
         token = getGoogleDriveAccessToken();
       }
       if (!token) {
