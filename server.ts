@@ -7,7 +7,7 @@ import {
   createApiApp,
   fetchLiveGoogleFontsCatalog,
   sweepExpiredCaches,
-} from './server/apiApp.ts';
+} from './api/index.ts';
 
 dotenv.config();
 

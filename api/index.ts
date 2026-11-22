@@ -1,6 +1,915 @@
-import { createApiApp } from '../server/apiApp';
+import crypto from 'node:crypto';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import compression from 'compression';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 
-// Vercel Serverless Function entry point (handles /api/* and /healthz via vercel.json rewrites)
-const app = createApiApp({ enableCompression: false });
+const KIT_ID_RE = /^[a-zA-Z0-9]{4,20}$/;
+const MAX_KIT_CSS_BYTES = 512 * 1024;
+const GOOGLE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const ADOBE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const PAIRING_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_ADOBE_CACHE_ENTRIES = 500;
+const MAX_PAIRING_CACHE_ENTRIES = 300;
+const MAX_RATE_LIMIT_KEYS = 10_000;
 
-export default app;
+interface GoogleFontCatalogItem {
+  family: string;
+  category: string;
+  designer: string;
+  variants: string[];
+  subsets: string[];
+  axes: string[];
+  version: string;
+  lastModified: string;
+  popularity: number;
+}
+
+interface CachedCatalog {
+  fetchedAt: number;
+  source: 'google-webfonts-api' | 'google-fonts-metadata';
+  etag: string;
+  items: GoogleFontCatalogItem[];
+}
+
+interface ParsedAdobeKit {
+  kitId: string;
+  cssUrl: string;
+  families: Array<{
+    cssFamily: string;
+    displayName: string;
+    styles: Array<{ weight: number; italic: boolean }>;
+  }>;
+}
+
+interface CachedAdobeKit {
+  fetchedAt: number;
+  data: ParsedAdobeKit;
+}
+
+interface CachedPairingResult {
+  fetchedAt: number;
+  data: unknown;
+}
+
+class UpstreamHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+let googleCatalogCache: CachedCatalog | null = null;
+let googleCatalogInFlight: Promise<CachedCatalog> | null = null;
+
+const adobeKitCache = new Map<string, CachedAdobeKit>();
+const adobeKitInFlight = new Map<string, Promise<ParsedAdobeKit>>();
+
+const pairingCache = new Map<string, CachedPairingResult>();
+const pairingInFlight = new Map<string, Promise<Record<string, unknown>>>();
+
+let geminiClient: GoogleGenAI | null = null;
+let geminiClientKey = '';
+
+function getGeminiClient(): GoogleGenAI {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new UpstreamHttpError(
+      503,
+      'Gemini API key is not configured on the server. Add GEMINI_API_KEY in your environment variables.',
+    );
+  }
+  if (!geminiClient || geminiClientKey !== apiKey) {
+    geminiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        timeout: 20_000,
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+    geminiClientKey = apiKey;
+  }
+  return geminiClient;
+}
+
+// Bounded in-memory per-IP fixed-window rate limiter with automatic sweep
+interface RateBucket {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimitStores: Array<Map<string, RateBucket>> = [];
+
+function createRateLimiter(options: { windowMs: number; max: number }) {
+  const store = new Map<string, RateBucket>();
+  rateLimitStores.push(store);
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    let bucket = store.get(ip);
+
+    if (!bucket || now >= bucket.resetAt) {
+      if (store.size >= MAX_RATE_LIMIT_KEYS && !store.has(ip)) {
+        const firstKey = store.keys().next().value;
+        if (firstKey !== undefined) store.delete(firstKey);
+      }
+      bucket = { count: 1, resetAt: now + options.windowMs };
+      store.set(ip, bucket);
+    } else {
+      bucket.count += 1;
+    }
+
+    const remaining = Math.max(0, options.max - bucket.count);
+    res.setHeader('X-RateLimit-Limit', String(options.max));
+    res.setHeader('X-RateLimit-Remaining', String(remaining));
+
+    if (bucket.count > options.max) {
+      const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      res.status(429).json({
+        error: 'Too many requests. Please wait a moment and try again.',
+      });
+      return;
+    }
+
+    next();
+  };
+}
+
+export function sweepExpiredCaches(): void {
+  const now = Date.now();
+  for (const store of rateLimitStores) {
+    for (const [key, bucket] of store.entries()) {
+      if (now >= bucket.resetAt) store.delete(key);
+    }
+  }
+  for (const [kitId, entry] of adobeKitCache.entries()) {
+    if (now - entry.fetchedAt >= ADOBE_CACHE_TTL_MS) {
+      adobeKitCache.delete(kitId);
+    }
+  }
+  for (const [cacheKey, entry] of pairingCache.entries()) {
+    if (now - entry.fetchedAt >= PAIRING_CACHE_TTL_MS) {
+      pairingCache.delete(cacheKey);
+    }
+  }
+}
+
+function buildEtag(seed: string): string {
+  const hash = crypto.createHash('sha1').update(seed).digest('hex').slice(0, 16);
+  return `W/"${hash}"`;
+}
+
+async function loadGoogleFontsFromUpstream(): Promise<CachedCatalog> {
+  const apiKey = (process.env.GOOGLE_FONTS_API_KEY || '').trim();
+  if (apiKey) {
+    try {
+      const apiUrl = `https://www.googleapis.com/webfonts/v1/webfonts?sort=popularity&capability=VF&key=${encodeURIComponent(apiKey)}`;
+      const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
+      if (resp.ok) {
+        const json = (await resp.json()) as {
+          items?: Array<{
+            family: string;
+            category?: string;
+            variants?: string[];
+            subsets?: string[];
+            axes?: Array<{ tag: string }>;
+            version?: string;
+            lastModified?: string;
+          }>;
+        };
+        const items: GoogleFontCatalogItem[] = (json.items ?? []).map((item, idx) => ({
+          family: item.family,
+          category: item.category || 'sans-serif',
+          designer: 'Google Fonts Foundry',
+          variants: item.variants || ['regular'],
+          subsets: item.subsets || ['latin'],
+          axes: (item.axes || []).map((a) => a.tag),
+          version: item.version || 'v1',
+          lastModified: item.lastModified || new Date().toISOString().slice(0, 10),
+          popularity: idx + 1,
+        }));
+        if (items.length > 0) {
+          return {
+            fetchedAt: Date.now(),
+            source: 'google-webfonts-api',
+            etag: buildEtag(`wf:${items.length}:${items[0].family}:${items[items.length - 1].lastModified}`),
+            items,
+          };
+        }
+      }
+    } catch {
+      // Fall through to public Google Fonts directory metadata feed
+    }
+  }
+
+  // Official public Google Fonts directory metadata feed (returns 1,900+ live families)
+  const metaResp = await fetch('https://fonts.google.com/metadata/fonts', {
+    signal: AbortSignal.timeout(12000),
+    headers: { Accept: 'application/json' },
+  });
+  if (!metaResp.ok) {
+    throw new Error(`Google Fonts directory unavailable (${metaResp.status})`);
+  }
+  const rawText = await metaResp.text();
+  // Google Fonts metadata prefixes JSON with XSSI guard ")]}'"
+  const cleaned = rawText.replace(/^\)\]\}'\s*/, '');
+  const parsed = JSON.parse(cleaned) as {
+    familyMetadataList?: Array<{
+      family: string;
+      category?: string;
+      designers?: string[];
+      subsets?: string[];
+      axes?: Array<{ tag: string }>;
+      fonts?: Record<string, unknown>;
+      lastModified?: string;
+      popularity?: number;
+    }>;
+  };
+
+  const rawList = parsed.familyMetadataList ?? [];
+  const items: GoogleFontCatalogItem[] = rawList
+    .filter((f) => f.family && f.category !== 'Icons')
+    .sort((a, b) => (a.popularity ?? 9999) - (b.popularity ?? 9999))
+    .map((f, idx) => ({
+      family: f.family,
+      category: f.category || 'Sans Serif',
+      designer: f.designers && f.designers.length > 0 ? f.designers.join(', ') : 'Google Fonts Contributor',
+      variants: Object.keys(f.fonts || { '400': {} }),
+      subsets: (f.subsets || ['latin']).filter((s) => s !== 'menu'),
+      axes: (f.axes || []).map((a) => a.tag),
+      version: 'Live',
+      lastModified: f.lastModified || new Date().toISOString().slice(0, 10),
+      popularity: f.popularity ?? idx + 1,
+    }));
+
+  return {
+    fetchedAt: Date.now(),
+    source: 'google-fonts-metadata',
+    etag: buildEtag(`meta:${items.length}:${items[0]?.family ?? ''}:${items[items.length - 1]?.lastModified ?? ''}`),
+    items,
+  };
+}
+
+/**
+ * Fetches Google Fonts catalog with:
+ * - 1-hour in-memory cache
+ * - Single-flight deduplication (prevents cold-start / expiry thundering herd)
+ * - Stale-while-error resilience (serves cached catalog if upstream hiccups)
+ */
+export async function fetchLiveGoogleFontsCatalog(): Promise<CachedCatalog> {
+  if (googleCatalogCache && Date.now() - googleCatalogCache.fetchedAt < GOOGLE_CACHE_TTL_MS) {
+    return googleCatalogCache;
+  }
+
+  if (googleCatalogInFlight) {
+    return googleCatalogInFlight;
+  }
+
+  googleCatalogInFlight = loadGoogleFontsFromUpstream()
+    .then((fresh) => {
+      googleCatalogCache = fresh;
+      return fresh;
+    })
+    .catch((err) => {
+      if (googleCatalogCache) {
+        console.warn('[Fontainer] Upstream Google Fonts refresh failed; serving stale cache.');
+        return googleCatalogCache;
+      }
+      throw err;
+    })
+    .finally(() => {
+      googleCatalogInFlight = null;
+    });
+
+  return googleCatalogInFlight;
+}
+
+function parseAdobeTypekitCss(cssText: string, kitId: string): ParsedAdobeKit {
+  const faceRegex = /@font-face\s*\{([^}]+)\}/gi;
+  const familyMap = new Map<
+    string,
+    {
+      cssFamily: string;
+      displayName: string;
+      styles: Array<{ weight: number; italic: boolean }>;
+    }
+  >();
+
+  let match: RegExpExecArray | null;
+  while ((match = faceRegex.exec(cssText)) !== null) {
+    const block = match[1];
+    const famMatch = /font-family\s*:\s*["']?([^;"']+)["']?/i.exec(block);
+    if (!famMatch) continue;
+    const rawFam = famMatch[1].trim();
+    const weightMatch = /font-weight\s*:\s*(\d+|normal|bold)/i.exec(block);
+    const styleMatch = /font-style\s*:\s*(italic|oblique|normal)/i.exec(block);
+
+    let weight = 400;
+    if (weightMatch) {
+      const w = weightMatch[1].toLowerCase();
+      weight = w === 'bold' ? 700 : w === 'normal' ? 400 : Math.min(900, Math.max(100, Number(w) || 400));
+    }
+    const italic = Boolean(styleMatch && styleMatch[1].toLowerCase() !== 'normal');
+
+    const displayName = rawFam
+      .split(/[-_]+/)
+      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ''))
+      .join(' ')
+      .trim();
+
+    const existing = familyMap.get(rawFam) ?? {
+      cssFamily: rawFam,
+      displayName: displayName || rawFam,
+      styles: [],
+    };
+    const dup = existing.styles.some((s) => s.weight === weight && s.italic === italic);
+    if (!dup) {
+      existing.styles.push({ weight, italic });
+    }
+    familyMap.set(rawFam, existing);
+  }
+
+  return {
+    kitId,
+    cssUrl: `https://use.typekit.net/${kitId}.css`,
+    families: Array.from(familyMap.values()).map((f) => ({
+      ...f,
+      styles: f.styles.sort((a, b) => a.weight - b.weight || Number(a.italic) - Number(b.italic)),
+    })),
+  };
+}
+
+async function fetchAdobeKitCached(kitId: string): Promise<ParsedAdobeKit> {
+  const cached = adobeKitCache.get(kitId);
+  if (cached && Date.now() - cached.fetchedAt < ADOBE_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const inflight = adobeKitInFlight.get(kitId);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const resp = await fetch(`https://use.typekit.net/${kitId}.css`, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': 'Fontainer/1.0' },
+    });
+    if (!resp.ok) {
+      throw new UpstreamHttpError(
+        resp.status === 404 ? 404 : 502,
+        resp.status === 404
+          ? `Adobe Fonts project "${kitId}" was not found. Confirm the Project ID in Adobe Fonts → Web Projects.`
+          : `Adobe Fonts returned HTTP ${resp.status}.`,
+      );
+    }
+
+    const contentLength = Number(resp.headers.get('content-length') || '0');
+    if (contentLength > MAX_KIT_CSS_BYTES) {
+      throw new UpstreamHttpError(413, 'Adobe Fonts stylesheet exceeded maximum supported size.');
+    }
+
+    const cssText = await resp.text();
+    if (Buffer.byteLength(cssText, 'utf8') > MAX_KIT_CSS_BYTES) {
+      throw new UpstreamHttpError(413, 'Adobe Fonts stylesheet exceeded maximum supported size.');
+    }
+
+    const parsed = parseAdobeTypekitCss(cssText, kitId);
+    if (parsed.families.length === 0) {
+      throw new UpstreamHttpError(422, `Project "${kitId}" loaded but contains no @font-face declarations yet.`);
+    }
+
+    if (adobeKitCache.size >= MAX_ADOBE_CACHE_ENTRIES && !adobeKitCache.has(kitId)) {
+      const oldestKey = adobeKitCache.keys().next().value;
+      if (oldestKey !== undefined) adobeKitCache.delete(oldestKey);
+    }
+    adobeKitCache.set(kitId, { fetchedAt: Date.now(), data: parsed });
+    return parsed;
+  })().finally(() => {
+    adobeKitInFlight.delete(kitId);
+  });
+
+  adobeKitInFlight.set(kitId, task);
+  return task;
+}
+
+export interface CreateApiAppOptions {
+  enableCompression?: boolean;
+}
+
+export function createApiApp(options: CreateApiAppOptions = {}): Express {
+  const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+
+  // Baseline security headers (iframe-compatible)
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
+  // Allow standalone Tauri macOS .dmg WebView origins + optional ALLOWED_ORIGINS env list to call /api/*
+  const allowedOrigins = new Set<string>([
+    'tauri://localhost',
+    'http://tauri.localhost',
+    'https://tauri.localhost',
+  ]);
+  for (const raw of (process.env.ALLOWED_ORIGINS || '').split(',')) {
+    const trimmed = raw.trim().replace(/\/+$/, '');
+    if (trimmed) allowedOrigins.add(trimmed);
+  }
+
+  app.use('/api', (req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      if (req.method === 'OPTIONS') {
+        res.status(204).end();
+        return;
+      }
+    }
+    next();
+  });
+
+  // Gzip / deflate response compression for standalone Node / Cloud Run (Vercel Edge compresses automatically)
+  const shouldCompress = options.enableCompression ?? process.env.VERCEL !== '1';
+  if (shouldCompress) {
+    app.use(compression({ threshold: 1024 }));
+  }
+
+  const jsonParser = express.json({ limit: '1mb' });
+  app.use((req, res, next) => {
+    if (req.body !== undefined && typeof req.body === 'object') {
+      next();
+      return;
+    }
+    jsonParser(req, res, next);
+  });
+
+  const catalogLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+  const adobeLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+  const pairingLimiter = createRateLimiter({ windowMs: 60_000, max: 15 });
+
+  // Liveness & readiness probe (Cloud Run & Vercel)
+  app.get('/healthz', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      status: 'ok',
+      runtime: process.env.VERCEL === '1' ? 'vercel' : 'node',
+      uptimeSeconds: Math.floor(process.uptime()),
+      catalogCached: Boolean(googleCatalogCache),
+      catalogCount: googleCatalogCache?.items.length ?? 0,
+    });
+  });
+
+  // Integration availability endpoint
+  app.get('/api/integrations/status', catalogLimiter, (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300');
+    res.json({
+      googleFonts: { available: true, hasApiKey: Boolean(process.env.GOOGLE_FONTS_API_KEY) },
+      adobeFonts: { available: true },
+    });
+  });
+
+  // 1. Live Google Fonts Directory Proxy (Edge-cached, ETag-enabled, single-flight)
+  app.get('/api/google-fonts', catalogLimiter, async (req, res) => {
+    try {
+      const catalog = await fetchLiveGoogleFontsCatalog();
+      const q = String(req.query.q || '').trim().toLowerCase();
+      const category = String(req.query.category || '').trim().toLowerCase();
+      const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 250));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+
+      const responseEtag =
+        !q && (!category || category === 'all') && offset === 0
+          ? `${catalog.etag.slice(0, -1)}-${limit}"`
+          : buildEtag(`${catalog.etag}:${q}:${category}:${offset}:${limit}`);
+
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400');
+      res.setHeader('ETag', responseEtag);
+
+      if (req.headers['if-none-match'] === responseEtag) {
+        res.status(304).end();
+        return;
+      }
+
+      let filtered = catalog.items;
+      if (q) {
+        filtered = filtered.filter(
+          (f) => f.family.toLowerCase().includes(q) || f.designer.toLowerCase().includes(q),
+        );
+      }
+      if (category && category !== 'all') {
+        filtered = filtered.filter((f) => f.category.toLowerCase() === category);
+      }
+
+      res.json({
+        source: catalog.source,
+        total: catalog.items.length,
+        matched: filtered.length,
+        items: filtered.slice(offset, offset + limit),
+      });
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to load live Google Fonts directory',
+      });
+    }
+  });
+
+  // 2. Live Adobe Fonts (Typekit) Web Project Kit Proxy (rate-limited, Edge-cached, single-flight)
+  app.get('/api/adobe-fonts/kit/:kitId', adobeLimiter, async (req, res) => {
+    const kitId = String(req.params.kitId || '').trim();
+    if (!KIT_ID_RE.test(kitId)) {
+      res.status(400).json({
+        error: 'Invalid Adobe Fonts Project ID. Use the 6–8 character ID from use.typekit.net/<id>.css.',
+      });
+      return;
+    }
+
+    try {
+      const parsed = await fetchAdobeKitCached(kitId);
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=900, stale-while-revalidate=3600');
+      res.json(parsed);
+    } catch (err) {
+      if (err instanceof UpstreamHttpError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Unable to reach Adobe Fonts (use.typekit.net)',
+      });
+    }
+  });
+
+  // 3. AI-Powered Font Pairing Assistant (Server-side Gemini API via @google/genai)
+  const ALLOWED_CONTEXTS: Record<string, string> = {
+    'saas-ui': 'Modern SaaS application, product dashboard, and clean UI layouts',
+    editorial: 'Editorial publishing, long-form articles, essays, and magazine typography',
+    branding: 'Brand identity, hero headlines, and expressive studio websites',
+    marketing: 'High-conversion marketing landing pages, campaigns, and product launches',
+    docs: 'Technical documentation, developer portals, and code-heavy reading interfaces',
+    portfolio: 'Creative portfolio, architecture, photography, and design showcases',
+  };
+  const ALLOWED_ROLES = new Set(['auto', 'heading', 'body', 'ui']);
+
+  app.post('/api/font-pairings', pairingLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const body = req.body as {
+      font?: {
+        name?: unknown;
+        classification?: unknown;
+        foundry?: unknown;
+        width?: unknown;
+        isVariable?: unknown;
+        stylesCount?: unknown;
+        weights?: unknown;
+        tags?: unknown;
+      };
+      context?: unknown;
+      selectedRole?: unknown;
+      customBrief?: unknown;
+      theme?: unknown;
+      previewText?: unknown;
+      userLibraryFamilies?: unknown;
+      forceRefresh?: unknown;
+    };
+
+    const fontName = String(body?.font?.name || '').trim().slice(0, 80);
+    if (!fontName) {
+      res.status(400).json({ error: 'A selected font family name is required.' });
+      return;
+    }
+
+    const rawContext = String(body?.context || 'saas-ui').trim().toLowerCase();
+    const contextKey = rawContext in ALLOWED_CONTEXTS ? rawContext : 'saas-ui';
+    const rawRole = String(body?.selectedRole || 'auto').trim().toLowerCase();
+    const selectedRole = ALLOWED_ROLES.has(rawRole) ? rawRole : 'auto';
+    const customBrief = String(body?.customBrief || '').trim().slice(0, 160);
+    const theme = String(body?.theme || 'light').trim().slice(0, 16);
+    const previewText = String(body?.previewText || '').trim().slice(0, 120);
+    const classification = String(body?.font?.classification || 'Sans Serif').trim().slice(0, 40);
+    const width = String(body?.font?.width || 'Normal').trim().slice(0, 24);
+    const isVariable = Boolean(body?.font?.isVariable);
+    const weights = Array.isArray(body?.font?.weights)
+      ? body.font.weights
+          .map((w) => Number(w))
+          .filter((w) => Number.isFinite(w) && w >= 100 && w <= 900)
+          .slice(0, 10)
+      : [400];
+    const userLibraryFamilies = Array.isArray(body?.userLibraryFamilies)
+      ? body.userLibraryFamilies
+          .map((f) => String(f).trim().slice(0, 64))
+          .filter((f) => f && f.toLowerCase() !== fontName.toLowerCase())
+          .slice(0, 30)
+      : [];
+    const forceRefresh = Boolean(body?.forceRefresh);
+
+    const cacheKey = crypto
+      .createHash('sha1')
+      .update(
+        JSON.stringify({
+          fontName: fontName.toLowerCase(),
+          classification,
+          contextKey,
+          selectedRole,
+          customBrief: customBrief.toLowerCase(),
+          theme,
+        }),
+      )
+      .digest('hex');
+
+    if (!forceRefresh) {
+      const cached = pairingCache.get(cacheKey);
+      if (cached && Date.now() - cached.fetchedAt < PAIRING_CACHE_TTL_MS) {
+        res.json({ ...(cached.data as Record<string, unknown>), cached: true });
+        return;
+      }
+      const existingInflight = pairingInFlight.get(cacheKey);
+      if (existingInflight) {
+        try {
+          const sharedPayload = await existingInflight;
+          res.json(sharedPayload);
+          return;
+        } catch (err) {
+          if (err instanceof UpstreamHttpError) {
+            res.status(err.status).json({ error: err.message });
+            return;
+          }
+          res.status(502).json({ error: err instanceof Error ? err.message : 'Unable to generate font pairings.' });
+          return;
+        }
+      }
+    }
+
+    const runPairingTask = async (): Promise<Record<string, unknown>> => {
+      const ai = getGeminiClient();
+
+      // Build fast canonical lookup from the cached Google Fonts directory without bloating the prompt
+      let catalogLookup = new Map<string, string>();
+      try {
+        const catalog = await fetchLiveGoogleFontsCatalog();
+        catalogLookup = new Map(catalog.items.map((item) => [item.family.toLowerCase(), item.family]));
+      } catch {
+        // Proceed even if catalog metadata temporarily unavailable
+      }
+
+      const roleDirective =
+        selectedRole === 'heading'
+          ? `Use "${fontName}" for HEADINGS; suggest complementary fonts for Body, UI/Labels, and Code/Accent.`
+          : selectedRole === 'body'
+            ? `Use "${fontName}" for BODY COPY; suggest complementary fonts for Headings/Display, UI/Labels, and Accent/Mono.`
+            : selectedRole === 'ui'
+              ? `Use "${fontName}" for UI CONTROLS & LABELS; suggest complementary fonts for Display Headings, Body copy, and Mono.`
+              : `Pick the best primary role for "${fontName}" and suggest 3 complementary partner fonts covering Headings, Body, and UI/Accent.`;
+
+      const prompt = [
+        `Analyze the typeface "${fontName}" (${classification}, ${width} width${isVariable ? ', variable' : ''}, weights: ${weights.join(', ') || '400'}) and suggest 3 complementary Google Fonts pairings.`,
+        `Context: ${ALLOWED_CONTEXTS[contextKey]} (${theme} mode).`,
+        customBrief ? `Brief: ${customBrief}` : '',
+        previewText ? `Sample text: "${previewText}"` : '',
+        `Role guidance: ${roleDirective}`,
+        userLibraryFamilies.length > 0
+          ? `User workspace fonts you may also consider: ${userLibraryFamilies.slice(0, 15).join(', ')}`
+          : '',
+        `Rules: Never suggest "${fontName}" itself. Use exact real Google Fonts family names (or listed workspace fonts). Keep rationale crisp (1-2 sentences).`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const requestParams = {
+        model: 'gemini-3.1-flash-lite',
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'You are a principal typographer and design systems director. Return concise, high-craft font pairings strictly matching the JSON schema.',
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              analysis: {
+                type: Type.OBJECT,
+                properties: {
+                  personality: {
+                    type: Type.STRING,
+                    description: '2-4 word typographic personality (e.g. Neo-grotesque precision)',
+                  },
+                  idealRole: {
+                    type: Type.STRING,
+                    description: 'Heading, Body, UI, or Accent',
+                  },
+                  summary: {
+                    type: Type.STRING,
+                    description: 'One concise sentence assessing the typeface.',
+                  },
+                },
+                required: ['personality', 'idealRole', 'summary'],
+              },
+              pairings: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    family: {
+                      type: Type.STRING,
+                      description: 'Exact Google Fonts family name (e.g. Inter, Newsreader, JetBrains Mono).',
+                    },
+                    role: {
+                      type: Type.STRING,
+                      description: 'Heading, Body, UI & Labels, Code / Mono, or Accent.',
+                    },
+                    classification: {
+                      type: Type.STRING,
+                      description: 'Sans Serif, Serif, Slab Serif, Display, or Monospace.',
+                    },
+                    rationale: {
+                      type: Type.STRING,
+                      description: '1-2 concise sentences explaining why this pairing works typographically.',
+                    },
+                    recommendedWeights: {
+                      type: Type.STRING,
+                      description: 'e.g. 400 Regular / 500 Medium.',
+                    },
+                    sizeRatio: {
+                      type: Type.STRING,
+                      description: 'e.g. 15px / 1.6 leading or 2.0x heading ratio.',
+                    },
+                    harmonyScore: {
+                      type: Type.INTEGER,
+                      description: 'Harmony score from 82 to 99.',
+                    },
+                    sampleHeadline: {
+                      type: Type.STRING,
+                      description: 'Short 3-6 word headline matching the design context.',
+                    },
+                    sampleBody: {
+                      type: Type.STRING,
+                      description: 'Short 1-sentence body/UI copy (8-15 words).',
+                    },
+                  },
+                  required: [
+                    'family',
+                    'role',
+                    'classification',
+                    'rationale',
+                    'recommendedWeights',
+                    'sizeRatio',
+                    'harmonyScore',
+                    'sampleHeadline',
+                    'sampleBody',
+                  ],
+                },
+              },
+            },
+            required: ['analysis', 'pairings'],
+          },
+        },
+      };
+
+      const response = await ai.models.generateContent(requestParams);
+      const responseText = response.text;
+
+      if (!responseText) {
+        throw new Error('Empty response from Gemini API.');
+      }
+
+      const parsed = JSON.parse(responseText.trim()) as {
+        analysis?: { personality?: string; idealRole?: string; summary?: string };
+        pairings?: Array<{
+          family?: string;
+          role?: string;
+          classification?: string;
+          rationale?: string;
+          recommendedWeights?: string;
+          sizeRatio?: string;
+          harmonyScore?: number;
+          sampleHeadline?: string;
+          sampleBody?: string;
+        }>;
+      };
+
+      const seenFamilies = new Set<string>([fontName.toLowerCase()]);
+      const pairings = (parsed.pairings ?? [])
+        .map((p) => {
+          const rawFamily = String(p.family || '').trim();
+          if (!rawFamily) return null;
+          const lower = rawFamily.toLowerCase();
+          if (seenFamilies.has(lower)) return null;
+          seenFamilies.add(lower);
+
+          const canonical = catalogLookup.get(lower);
+          return {
+            family: canonical || rawFamily,
+            role: String(p.role || 'Body').slice(0, 32),
+            classification: String(p.classification || 'Sans Serif').slice(0, 32),
+            rationale: String(p.rationale || '').slice(0, 320),
+            recommendedWeights: String(p.recommendedWeights || '400 Regular').slice(0, 64),
+            sizeRatio: String(p.sizeRatio || '1.5x scale').slice(0, 64),
+            harmonyScore: Math.max(60, Math.min(99, Math.round(Number(p.harmonyScore) || 90))),
+            sampleHeadline: String(p.sampleHeadline || `${fontName} × ${canonical || rawFamily}`).slice(0, 90),
+            sampleBody: String(
+              p.sampleBody || 'Balanced hierarchy with clear optical rhythm across headings and interface copy.',
+            ).slice(0, 180),
+            inGoogleCatalog: Boolean(canonical),
+          };
+        })
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+        .slice(0, 4);
+
+      if (pairings.length === 0) {
+        throw new UpstreamHttpError(502, 'Gemini did not return valid pairing suggestions. Please try again.');
+      }
+
+      const payload: Record<string, unknown> = {
+        fontName,
+        context: contextKey,
+        selectedRole,
+        analysis: {
+          personality: String(parsed.analysis?.personality || `${classification} voice`).slice(0, 80),
+          idealRole: String(parsed.analysis?.idealRole || 'Heading').slice(0, 32),
+          summary: String(
+            parsed.analysis?.summary ||
+              `A versatile ${classification.toLowerCase()} typeface suited for clear typographic hierarchy.`,
+          ).slice(0, 260),
+        },
+        pairings,
+      };
+
+      if (pairingCache.size >= MAX_PAIRING_CACHE_ENTRIES && !pairingCache.has(cacheKey)) {
+        const oldestKey = pairingCache.keys().next().value;
+        if (oldestKey !== undefined) pairingCache.delete(oldestKey);
+      }
+      pairingCache.set(cacheKey, { fetchedAt: Date.now(), data: payload });
+
+      return payload;
+    };
+
+    const task = runPairingTask().finally(() => {
+      if (pairingInFlight.get(cacheKey) === task) {
+        pairingInFlight.delete(cacheKey);
+      }
+    });
+    pairingInFlight.set(cacheKey, task);
+
+    try {
+      const payload = await task;
+      res.json(payload);
+    } catch (err) {
+      if (err instanceof UpstreamHttpError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      const status = (err as { status?: number })?.status;
+      const rawMsg = err instanceof Error ? err.message : 'Unable to generate font pairings.';
+      if (status === 400 || status === 403 || /API_KEY_INVALID|PERMISSION_DENIED/i.test(rawMsg)) {
+        res.status(502).json({
+          error: 'Gemini API authentication failed. Check GEMINI_API_KEY in your server environment variables.',
+        });
+        return;
+      }
+      if (status === 429 || /RESOURCE_EXHAUSTED/i.test(rawMsg)) {
+        res.status(429).json({
+          error: 'Gemini API quota reached. Please wait a moment or check your billing quota.',
+        });
+        return;
+      }
+      if (/timeout|aborted/i.test(rawMsg)) {
+        res.status(504).json({
+          error: 'AI pairing request timed out. Please retry.',
+        });
+        return;
+      }
+      res.status(502).json({ error: rawMsg });
+    }
+  });
+
+  // Clean JSON fallback for malformed request bodies or unexpected middleware errors
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const status = typeof (err as { status?: number })?.status === 'number' ? (err as { status: number }).status : 500;
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    res.status(status).json({ error: message });
+  });
+
+  return app;
+}
+
+// Self-contained Vercel Serverless Function handler (zero cross-file relative imports for Node ESM safety)
+let cachedVercelApp: Express | null = null;
+
+export default function handler(req: Request, res: Response) {
+  if (!cachedVercelApp) {
+    cachedVercelApp = createApiApp({ enableCompression: false });
+  }
+  return cachedVercelApp(req, res);
+}

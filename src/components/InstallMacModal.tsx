@@ -22,7 +22,7 @@ npx tauri init --ci --app-name Fontainer \\
   --before-build-command "npm run build"
 sed -i '' 's/"com.tauri.dev"/"com.fontainer.app"/' src-tauri/tauri.conf.json
 npx tauri icon public/pwa-512x512.png
-VITE_API_BASE_URL="https://ais-pre-nwkeb76tu6s36gow7j2fex-453864111857.asia-northeast1.run.app" \\
+VITE_API_BASE_URL="https://fontainer-alpha.vercel.app" \\
   npx tauri build --bundles dmg`;
 
 export const InstallMacModal: React.FC<InstallMacModalProps> = ({

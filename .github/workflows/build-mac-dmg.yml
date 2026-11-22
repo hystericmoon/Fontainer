@@ -77,7 +77,7 @@ jobs:
 
       - name: Build Universal macOS .app bundle
         env:
-          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.FONTAINER_API_URL || 'https://ais-pre-nwkeb76tu6s36gow7j2fex-453864111857.asia-northeast1.run.app' }}
+          VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.FONTAINER_API_URL || 'https://fontainer-alpha.vercel.app' }}
         run: npx tauri build --target universal-apple-darwin --bundles app
 
       - name: Package drag-to-Applications .dmg (hdiutil)
