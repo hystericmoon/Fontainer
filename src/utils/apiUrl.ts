@@ -1,6 +1,10 @@
-import { DEFAULT_HOSTED_WEB_URL, isTauriDesktop } from '../services/desktopFontActivator';
+import {
+  DEFAULT_HOSTED_WEB_URL,
+  isTauriDesktop,
+  normalizeBaseUrl,
+} from '../services/desktopFontActivator';
 
-const RAW_API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '');
+const RAW_API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? '');
 
 /**
  * Resolves a backend API path.

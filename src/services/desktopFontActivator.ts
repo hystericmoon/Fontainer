@@ -41,12 +41,19 @@ export function isTauriDesktop(): boolean {
   return '__TAURI_INTERNALS__' in window || '__TAURI__' in window;
 }
 
+export function normalizeBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 /**
  * Resolves the hosted web app base URL used by Tauri desktop for API requests
  * and system-browser Google sign-in.
  */
 export function getDesktopWebBaseUrl(): string {
-  const configured = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  const configured = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL ?? '');
   if (configured) return configured;
   if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
     return window.location.origin;
