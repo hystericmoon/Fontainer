@@ -16,7 +16,23 @@ import { isTauriDesktop, startDesktopAuthSession } from './desktopFontActivator'
 
 export const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
-const app = initializeApp(firebaseConfig);
+// Use the hosting domain as authDomain on HTTPS web deployments (proxied via vercel.json `/__/auth/*`)
+// so modern browsers' third-party storage partitioning never breaks signInWithRedirect.
+function resolveAuthDomain(): string {
+  if (typeof window !== 'undefined' && !isTauriDesktop()) {
+    const host = window.location.hostname.toLowerCase();
+    const isLocal = host === 'localhost' || host === '127.0.0.1';
+    if (window.location.protocol === 'https:' && !isLocal) {
+      return window.location.host;
+    }
+  }
+  return firebaseConfig.authDomain;
+}
+
+const app = initializeApp({
+  ...firebaseConfig,
+  authDomain: resolveAuthDomain(),
+});
 
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);

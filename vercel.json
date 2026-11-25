@@ -31,12 +31,14 @@
     }
   ],
   "rewrites": [
+    { "source": "/__/auth/(.*)", "destination": "https://fontainer-app-hr.firebaseapp.com/__/auth/$1" },
+    { "source": "/__/firebase/init.json", "destination": "https://fontainer-app-hr.firebaseapp.com/__/firebase/init.json" },
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/healthz", "destination": "/api/index" },
     { "source": "/privacy", "destination": "/privacy/index.html" },
     { "source": "/privacy/", "destination": "/privacy/index.html" },
     { "source": "/terms", "destination": "/terms/index.html" },
     { "source": "/terms/", "destination": "/terms/index.html" },
-    { "source": "/((?!api/|assets/|.*\\..*).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/|__/|.*\\..*).*)", "destination": "/index.html" }
   ]
 }
