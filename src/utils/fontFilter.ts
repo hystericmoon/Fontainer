@@ -100,6 +100,8 @@ export function filterByDestination(
       return fonts.filter((f) => f.starred);
     case 'recent':
       return fonts.filter((f) => isRecentFont(f));
+    case 'icons':
+      return [];
     case 'library':
       return fonts.filter((f) => f.libraryId === destination.id);
     case 'list': {

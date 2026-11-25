@@ -37,6 +37,7 @@ export type SidebarDestination =
   | { type: 'deactivated' }
   | { type: 'starred' }
   | { type: 'recent' }
+  | { type: 'icons' }
   | { type: 'library'; id: string }
   | { type: 'list'; id: string }
   | { type: 'smart'; id: string };

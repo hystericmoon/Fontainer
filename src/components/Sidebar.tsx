@@ -18,12 +18,15 @@ import {
   Plug,
   Plus,
   RefreshCw,
+  Share2,
   SlidersHorizontal,
   Sparkles,
   Star,
   Trash2,
   Type,
+  Wand2,
 } from 'lucide-react';
+import type { DesktopUpdateInfo } from '../services/desktopFontActivator';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
 import { GoogleSignInButton } from './CloudConnectionsModal';
 
@@ -48,10 +51,12 @@ interface SidebarProps {
   onOpenNewSmartList: () => void;
   onOpenConnections: () => void;
   onOpenDuplicates: () => void;
+  onOpenMissingFonts?: () => void;
   onOpenCompare: () => void;
   compareCount: number;
   onDeleteList: (id: string) => void;
   onActivateAllInList: (id: string, active: boolean) => void;
+  onShareList?: (id: string) => void;
   onDeleteSmartList: (id: string) => void;
   onSyncLibrary: (id: string) => void;
   onActivateAllInLibrary?: (id: string, active: boolean) => void;
@@ -65,6 +70,7 @@ interface SidebarProps {
   sessionOnlyMode?: boolean;
   onToggleSessionOnlyMode?: () => void;
   onOpenOsFontsFolder?: () => void;
+  desktopUpdate?: DesktopUpdateInfo | null;
   user: User | null;
   cloudSynced: boolean;
   onSignInGoogle: () => void;
@@ -89,10 +95,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenNewSmartList,
   onOpenConnections,
   onOpenDuplicates,
+  onOpenMissingFonts,
   onOpenCompare,
   compareCount,
   onDeleteList,
   onActivateAllInList,
+  onShareList,
   onDeleteSmartList,
   onSyncLibrary,
   onActivateAllInLibrary,
@@ -106,6 +114,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   sessionOnlyMode = false,
   onToggleSessionOnlyMode,
   onOpenOsFontsFolder,
+  desktopUpdate = null,
   user,
   cloudSynced,
   onSignInGoogle,
@@ -147,6 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { dest: { type: 'deactivated' }, label: 'Deactivated', count: counts.deactivated, icon: <MinusCircle className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'starred' }, label: 'Starred', count: counts.starred, icon: <Star className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'recent' }, label: 'Recently Added', count: counts.recent, icon: <Clock className="w-3.5 h-3.5 shrink-0" /> },
+    { dest: { type: 'icons' }, label: 'Icon Sets', count: 120, icon: <Sparkles className="w-3.5 h-3.5 shrink-0" /> },
   ];
 
   const getLibraryIcon = (provider: FontLibrary['provider']) => {
@@ -479,6 +489,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         Deactivate All Fonts
                       </button>
+                      {onShareList && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            onShareList(list.id);
+                            setOpenMenuListId(null);
+                          }}
+                          className="w-full px-3 py-1.5 flex items-center gap-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
+                        >
+                          <Share2 className="w-3 h-3" />
+                          <span>Copy Share Link</span>
+                        </button>
+                      )}
                       <div className="my-1 border-t border-[var(--color-border)]" />
                       <button
                         type="button"
@@ -516,6 +540,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
         </button>
 
+        {onOpenMissingFonts && (
+          <button
+            type="button"
+            onClick={onOpenMissingFonts}
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] text-neutral-600 dark:text-neutral-400 hover:bg-black/[0.05] dark:hover:bg-white/[0.07] hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Wand2 className="w-3.5 h-3.5 text-neutral-500" />
+              <span>Auto-Activate Missing</span>
+            </span>
+            <span className="text-[10px] font-code text-neutral-400 dark:text-neutral-500">
+              Figma/CC
+            </span>
+          </button>
+        )}
         <button
           type="button"
           onClick={onOpenDuplicates}
@@ -542,6 +581,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {compareCount} pinned
           </span>
         </button>
+        {isDesktop && desktopUpdate && (
+          <a
+            href={desktopUpdate.downloadUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/20 transition-colors"
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Update v{desktopUpdate.latestVersion}</span>
+            </span>
+            <span className="text-[10px] font-code shrink-0">Get</span>
+          </a>
+        )}
         {isDesktop && onOpenOsFontsFolder && (
           <button
             type="button"

@@ -19,8 +19,16 @@ import { CompareView } from './components/CompareView';
 import { FilterBar } from './components/FilterBar';
 import { FontGrid } from './components/FontGrid';
 import { FontRow } from './components/FontRow';
+import { IconLibraryView } from './components/IconLibraryView';
 import { InspectorPanel } from './components/InspectorPanel';
 import { InstallMacModal } from './components/InstallMacModal';
+import {
+  decodeSharedFontStack,
+  encodeSharedFontStack,
+  MissingFontsModal,
+  SharedStackModal,
+  type SharedFontStackPayload,
+} from './components/ProjectSyncModals';
 import {
   DuplicateFinderModal,
   ImportFontsModal,
@@ -34,7 +42,11 @@ import { Toolbar } from './components/Toolbar';
 import { WaterfallView } from './components/WaterfallView';
 import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
-import { subscribeDesktopEvents } from './services/desktopFontActivator';
+import {
+  checkForDesktopUpdate,
+  subscribeDesktopEvents,
+  type DesktopUpdateInfo,
+} from './services/desktopFontActivator';
 import { countActiveFilterFacets } from './utils/fontFilter';
 
 type ActiveModal =
@@ -45,6 +57,7 @@ type ActiveModal =
   | 'import'
   | 'preferences'
   | 'duplicates'
+  | 'missing-fonts'
   | 'quick-switcher'
   | 'install-mac';
 
@@ -64,6 +77,9 @@ export default function App() {
   const [fileDropOverlay, setFileDropOverlay] = useState(false);
   const [expandedFamilyIds, setExpandedFamilyIds] = useState<Record<string, boolean>>({});
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_BATCH_SIZE);
+  const [sharedStack, setSharedStack] = useState<SharedFontStackPayload | null>(null);
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateInfo | null>(null);
+  const [activeSubfolder, setActiveSubfolder] = useState<string>('');
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -216,6 +232,29 @@ export default function App() {
     };
   }, [store.isDesktop, store.showToast]);
 
+  // Parse ?share=... project font stack links on mount + check GitHub Releases for desktop updates
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const shareParam = sp.get('share');
+    if (shareParam) {
+      const decoded = decodeSharedFontStack(shareParam);
+      if (decoded) {
+        setSharedStack(decoded);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+    if (store.isDesktop) {
+      void checkForDesktopUpdate(store.osPlatform).then((info) => {
+        if (info) setDesktopUpdate(info);
+      });
+    }
+  }, [store.isDesktop, store.osPlatform]);
+
+  // Reset subfolder filter when changing sidebar destination
+  useEffect(() => {
+    setActiveSubfolder('');
+  }, [store.destination]);
+
   const libraryMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const lib of store.libraries) map[lib.id] = lib.name;
@@ -235,6 +274,8 @@ export default function App() {
         return 'Starred';
       case 'recent':
         return 'Recently Added';
+      case 'icons':
+        return 'Icon Sets';
       case 'library':
         return libraryMap[dest.id] ?? 'Font Library';
       case 'list':
@@ -246,11 +287,53 @@ export default function App() {
 
   const activeFilterCount = useMemo(() => countActiveFilterFacets(store.filters), [store.filters]);
 
+  const librarySubfolders = useMemo(() => {
+    if (store.destination.type !== 'library') return [];
+    const set = new Set<string>();
+    for (const f of store.visibleFonts) {
+      if (!f.sourcePath) continue;
+      const parts = f.sourcePath.replace(/\\/g, '/').split('/').filter(Boolean);
+      if (parts.length >= 2) {
+        set.add(parts.slice(0, -1).join('/'));
+      }
+    }
+    return Array.from(set).sort().slice(0, 24);
+  }, [store.destination.type, store.visibleFonts]);
+
+  const subfolderFilteredFonts = useMemo(() => {
+    if (!activeSubfolder) return store.visibleFonts;
+    return store.visibleFonts.filter((f) => {
+      if (!f.sourcePath) return false;
+      const norm = f.sourcePath.replace(/\\/g, '/');
+      return norm.startsWith(`${activeSubfolder}/`) || norm.includes(`/${activeSubfolder}/`);
+    });
+  }, [store.visibleFonts, activeSubfolder]);
+
   const renderedFonts = useMemo(
-    () => store.visibleFonts.slice(0, visibleLimit),
-    [store.visibleFonts, visibleLimit],
+    () => subfolderFilteredFonts.slice(0, visibleLimit),
+    [subfolderFilteredFonts, visibleLimit],
   );
-  const hasMoreFonts = visibleLimit < store.visibleFonts.length;
+  const hasMoreFonts = visibleLimit < subfolderFilteredFonts.length;
+
+  const handleShareFontList = async (listId: string) => {
+    const list = store.fontLists.find((l) => l.id === listId);
+    if (!list || list.fontIds.length === 0) {
+      store.showToast('Add at least one font to this list before sharing');
+      return;
+    }
+    const fontEntries = list.fontIds
+      .map((id) => store.fonts.find((f) => f.id === id))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f))
+      .map((f) => ({ id: f.id, name: f.name }));
+    const encoded = encodeSharedFontStack({ name: list.name, fonts: fontEntries });
+    const shareUrl = `https://fontainer-alpha.vercel.app/?share=${encoded}`;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      store.showToast(`Copied share link for "${list.name}" (${fontEntries.length} fonts)`);
+    } catch {
+      store.showToast('Share link ready');
+    }
+  };
 
   const toggleExpandFamily = (fontId: string) => {
     setExpandedFamilyIds((prev) => ({ ...prev, [fontId]: !prev[fontId] }));
@@ -287,10 +370,12 @@ export default function App() {
             onOpenNewSmartList={() => setActiveModal('new-smart')}
             onOpenConnections={() => setActiveModal('connections')}
             onOpenDuplicates={() => setActiveModal('duplicates')}
+            onOpenMissingFonts={() => setActiveModal('missing-fonts')}
             onOpenCompare={() => store.setViewMode('compare')}
             compareCount={store.compareIds.length}
             onDeleteList={store.deleteFontList}
             onActivateAllInList={store.activateAllInList}
+            onShareList={(id) => void handleShareFontList(id)}
             onDeleteSmartList={store.deleteSmartList}
             onSyncLibrary={store.syncLibrary}
             onActivateAllInLibrary={(libId, active) => void store.activateAllInLibrary(libId, active)}
@@ -304,6 +389,7 @@ export default function App() {
             sessionOnlyMode={store.sessionOnlyMode}
             onToggleSessionOnlyMode={() => void store.toggleSessionOnlyMode()}
             onOpenOsFontsFolder={() => void store.openOsFontsFolder()}
+            desktopUpdate={desktopUpdate}
             user={store.user}
             cloudSynced={store.cloudSynced}
             onSignInGoogle={() => void store.signInWithGoogle(false)}
@@ -493,13 +579,46 @@ export default function App() {
             </div>
           )}
 
+          {/* Nested Subfolder Filter Bar (FontBase style) */}
+          {librarySubfolders.length > 1 && (
+            <div className="shrink-0 px-4 py-1.5 bg-[#F8F8F8] dark:bg-[#1E1E1E] border-b border-[var(--color-border)] flex items-center gap-1.5 overflow-x-auto text-[11.5px]">
+              <button
+                type="button"
+                onClick={() => setActiveSubfolder('')}
+                className={`h-6 px-2 rounded-md shrink-0 cursor-pointer transition-colors ${
+                  activeSubfolder === ''
+                    ? 'bg-[#1b1b1b] text-white dark:bg-[#f1f1f1] dark:text-[#111111] font-medium'
+                    : 'text-neutral-600 dark:text-neutral-400 hover:bg-black/5 dark:hover:bg-white/10'
+                }`}
+              >
+                All Folders
+              </button>
+              {librarySubfolders.map((sub) => (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => setActiveSubfolder(sub)}
+                  className={`h-6 px-2 rounded-md font-code shrink-0 cursor-pointer transition-colors ${
+                    activeSubfolder === sub
+                      ? 'bg-[#1b1b1b] text-white dark:bg-[#f1f1f1] dark:text-[#111111] font-medium'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:bg-black/5 dark:hover:bg-white/10'
+                  }`}
+                >
+                  {sub}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Main Viewport + Inspector Split */}
           <div className="flex-1 min-h-0 flex">
             <main
               aria-label="Font Specimens"
               className={`flex-1 min-w-0 h-full overflow-y-auto ${canvasBgClass}`}
             >
-              {store.viewMode === 'compare' ? (
+              {store.destination.type === 'icons' ? (
+                <IconLibraryView onNotify={store.showToast} />
+              ) : store.viewMode === 'compare' ? (
                 <CompareView
                   allFonts={store.fonts}
                   compareIds={store.compareIds}
@@ -792,6 +911,25 @@ export default function App() {
           onInstallPwa={pwa.install}
           onClose={() => setActiveModal(null)}
           onNotify={store.showToast}
+        />
+
+        <MissingFontsModal
+          isOpen={activeModal === 'missing-fonts'}
+          allFonts={store.fonts}
+          onActivateIds={(ids) => store.batchSetActivation(ids, true)}
+          onClose={() => setActiveModal(null)}
+          onNotify={store.showToast}
+        />
+
+        <SharedStackModal
+          stack={sharedStack}
+          allFonts={store.fonts}
+          onImportAndActivate={(stackName, fontIds) => {
+            store.createFontList(stackName, '#1b1b1b');
+            store.batchSetActivation(fontIds, true);
+            store.showToast(`Activated ${fontIds.length} fonts from "${stackName}"`);
+          }}
+          onClose={() => setSharedStack(null)}
         />
 
         {/* Subtle macOS HUD Toast */}

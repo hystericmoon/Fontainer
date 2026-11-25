@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
 import { Check, Copy, Download, Laptop, Terminal } from 'lucide-react';
+import {
+  MAC_DMG_DOWNLOAD_URL,
+  RELEASES_PAGE_URL,
+  WIN_EXE_DOWNLOAD_URL,
+} from '../services/desktopFontActivator';
 
 interface InstallMacModalProps {
   isOpen: boolean;
@@ -143,11 +148,39 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
                   2. Native Desktop App — macOS .dmg &amp; Windows .exe (Real OS Font Activation)
                 </h3>
                 <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
-                  Installs activated Google Fonts &amp; Google Drive fonts directly into{' '}
+                  Installs activated Google Fonts, Fontshare &amp; Google Drive fonts directly into{' '}
                   <code>~/Library/Fonts</code> (Mac) and{' '}
                   <code>%LOCALAPPDATA%\Microsoft\Windows\Fonts</code> (Windows) in real time via
-                  Firebase sync. Download installers from GitHub Actions / Releases or build locally:
+                  Firebase sync.
                 </p>
+                <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+                  <a
+                    href={MAC_DMG_DOWNLOAD_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[#1b1b1b] text-white dark:bg-[#f1f1f1] dark:text-[#111111] text-[12px] font-medium hover:opacity-90 transition-opacity"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download macOS (.dmg)</span>
+                  </a>
+                  <a
+                    href={WIN_EXE_DOWNLOAD_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-body)] text-[var(--color-text-primary)] text-[12px] font-medium hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Windows (.exe)</span>
+                  </a>
+                  <a
+                    href={RELEASES_PAGE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11.5px] text-[var(--color-text-secondary)] hover:underline ml-1"
+                  >
+                    All releases →
+                  </a>
+                </div>
               </div>
             </div>
             <div className="shrink-0">

@@ -102,6 +102,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [glyphSearch, setGlyphSearch] = useState<string>('');
   const [selectedGlyph, setSelectedGlyph] = useState<string>('&');
   const [copiedCss, setCopiedCss] = useState(false);
+  const [scaleRatio, setScaleRatio] = useState<number>(1.25);
 
   useEffect(() => {
     if (!font) return;
@@ -742,6 +743,99 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   label="Download SVG Specimen Sheet"
                   icon={<Download className="w-3.5 h-3.5" />}
                   onClick={downloadSvgSpecimen}
+                />
+              </div>
+            </section>
+
+            {/* Type Scale & Design Tokens Exporter */}
+            <section aria-label="Type Scale & Design Tokens" className="space-y-2.5 pt-2 border-t border-[var(--color-border)]">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
+                  Type Scale &amp; Tokens
+                </h3>
+                <select
+                  aria-label="Type scale ratio"
+                  value={scaleRatio}
+                  onChange={(e) => setScaleRatio(Number(e.target.value))}
+                  className="h-6 px-1.5 rounded-md bg-white dark:bg-[#262626] border border-[var(--color-border)] text-[11px] text-[var(--color-text-primary)] outline-none cursor-pointer"
+                >
+                  <option value={1.2}>1.20 Minor Third</option>
+                  <option value={1.25}>1.25 Major Third</option>
+                  <option value={1.333}>1.33 Perfect Fourth</option>
+                  <option value={1.414}>1.41 Augmented Fourth</option>
+                </select>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white dark:bg-[#262626] border border-[var(--color-border)] space-y-2">
+                {[
+                  { label: 'Display', step: 4 },
+                  { label: 'H1', step: 3 },
+                  { label: 'H2', step: 2 },
+                  { label: 'H3', step: 1 },
+                  { label: 'Body', step: 0 },
+                ].map(({ label, step }) => {
+                  const px = Math.round(16 * Math.pow(scaleRatio, step));
+                  return (
+                    <div key={label} className="flex items-baseline justify-between gap-2">
+                      <span
+                        className="truncate text-[var(--color-text-primary)]"
+                        style={{
+                          fontFamily: font.cssFamily,
+                          fontSize: `${Math.min(px, 34)}px`,
+                          lineHeight: 1.15,
+                        }}
+                      >
+                        {label} — {font.name}
+                      </span>
+                      <span className="font-code tabular-nums text-[10px] text-neutral-400 shrink-0">
+                        {px}px
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label="Copy CSS Vars"
+                  icon={<Copy className="w-3 h-3" />}
+                  onClick={() => {
+                    const steps = [
+                      ['--text-body', 0],
+                      ['--text-h3', 1],
+                      ['--text-h2', 2],
+                      ['--text-h1', 3],
+                      ['--text-display', 4],
+                    ] as const;
+                    const vars = [
+                      `:root {`,
+                      `  --font-primary: ${font.cssFamily};`,
+                      ...steps.map(
+                        ([name, s]) => `  ${name}: ${(Math.pow(scaleRatio, s)).toFixed(3)}rem;`,
+                      ),
+                      `}`,
+                    ].join('\n');
+                    void copyToClipboard(vars, 'CSS Type Scale tokens');
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label="Tailwind @theme"
+                  icon={<Copy className="w-3 h-3" />}
+                  onClick={() => {
+                    const tw = [
+                      `@theme {`,
+                      `  --font-display: ${font.cssFamily};`,
+                      `  --text-h1: ${Math.pow(scaleRatio, 3).toFixed(3)}rem;`,
+                      `  --text-h2: ${Math.pow(scaleRatio, 2).toFixed(3)}rem;`,
+                      `  --text-h3: ${Math.pow(scaleRatio, 1).toFixed(3)}rem;`,
+                      `}`,
+                    ].join('\n');
+                    void copyToClipboard(tw, 'Tailwind v4 @theme tokens');
+                  }}
                 />
               </div>
             </section>

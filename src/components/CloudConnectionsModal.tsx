@@ -20,7 +20,10 @@ import {
   listGoogleDriveFonts,
   type RemoteFontFile,
 } from '../services/cloudProviders';
-import type { DetectedLocalDriveFolder } from '../services/desktopFontActivator';
+import {
+  pickNativeFolder,
+  type DetectedLocalDriveFolder,
+} from '../services/desktopFontActivator';
 import { getGoogleDriveAccessToken } from '../services/firebase';
 import type { AdobeKitRecord, LibraryProvider } from '../types/font';
 
@@ -746,15 +749,38 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                     type="text"
                     value={watchPathInput}
                     onChange={(e) => setWatchPathInput(e.target.value)}
-                    placeholder="Paste folder path (e.g. /Users/you/Fonts or G:\My Drive\Fonts)"
+                    placeholder="Choose or paste folder path…"
                     className="flex-1 h-8 px-2.5 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[12px] font-code text-[var(--color-text-primary)] outline-none focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1]"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    isDisabled={localBusy === 'watch'}
+                    label="Browse…"
+                    onClick={async () => {
+                      const picked = await pickNativeFolder('Select Folder to Watch & Auto-Activate');
+                      if (picked) {
+                        setLocalBusy('watch');
+                        setLocalError('');
+                        try {
+                          await onAddWatchedFolder(picked);
+                        } catch (err) {
+                          setLocalError(
+                            err instanceof Error ? err.message : 'Unable to watch folder',
+                          );
+                        } finally {
+                          setLocalBusy(null);
+                        }
+                      }
+                    }}
                   />
                   <Button
                     type="submit"
                     variant="primary"
                     size="sm"
-                    isDisabled={localBusy === 'watch'}
-                    label="Watch Folder"
+                    isDisabled={localBusy === 'watch' || !watchPathInput.trim()}
+                    label="Watch"
                   />
                 </form>
                 {watchedFolders.length > 0 && (

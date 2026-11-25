@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
+
+export const APP_VERSION = '1.0.0';
+export const GITHUB_REPO = 'hystericmoon/Fontainer';
+export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
+export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
+export const RELEASES_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
 export interface OsFontStatus {
   platform: 'macos' | 'windows' | 'linux' | string;
@@ -187,6 +194,48 @@ export async function watchLocalFolder(folderPath: string): Promise<ZeroCopyFold
 export async function unwatchLocalFolder(folderPath: string): Promise<string[]> {
   if (!isTauriDesktop()) return [];
   return invoke<string[]>('unwatch_local_folder', { folderPath });
+}
+
+/** Opens the native macOS Finder / Windows Explorer folder chooser dialog */
+export async function pickNativeFolder(title = 'Choose Font Folder'): Promise<string | null> {
+  if (!isTauriDesktop()) return null;
+  const selected = await openNativeDialog({
+    directory: true,
+    multiple: false,
+    title,
+  });
+  return typeof selected === 'string' && selected.trim() ? selected : null;
+}
+
+export interface DesktopUpdateInfo {
+  latestVersion: string;
+  downloadUrl: string;
+  releaseUrl: string;
+}
+
+/** Checks GitHub Releases for a newer desktop version (zero signing-key friction) */
+export async function checkForDesktopUpdate(
+  platform: string | null,
+): Promise<DesktopUpdateInfo | null> {
+  try {
+    const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      signal: AbortSignal.timeout(8000),
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { tag_name?: string; html_url?: string };
+    const latest = (data.tag_name ?? '').replace(/^v/i, '').trim();
+    if (!latest || latest === APP_VERSION) return null;
+    const isNewer = latest.localeCompare(APP_VERSION, undefined, { numeric: true }) > 0;
+    if (!isNewer) return null;
+    return {
+      latestVersion: latest,
+      downloadUrl: platform === 'windows' ? WIN_EXE_DOWNLOAD_URL : MAC_DMG_DOWNLOAD_URL,
+      releaseUrl: data.html_url || RELEASES_PAGE_URL,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function subscribeDesktopEvents(callbacks: {
