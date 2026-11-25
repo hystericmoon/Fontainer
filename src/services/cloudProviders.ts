@@ -109,6 +109,7 @@ export async function fetchLiveGoogleFonts(
       version: string;
       lastModified: string;
       popularity: number;
+      trending?: number;
     }>;
   };
 
@@ -149,6 +150,8 @@ export async function fetchLiveGoogleFonts(
       openTypeFeatures: isVariable ? ['liga', 'kern', 'tnum', ...item.axes] : ['liga', 'kern'],
       libraryId,
       addedAt: item.lastModified ? `${item.lastModified}T00:00:00Z` : new Date().toISOString(),
+      popularityRank: item.popularity,
+      trendingRank: item.trending ?? item.popularity,
       starred: false,
       activated: false,
       tags: [classification.toLowerCase().replace(/\s+/g, '-')],
@@ -182,6 +185,8 @@ export async function fetchLiveFontshareFonts(
       features: string[];
       version: string;
       addedAt: string;
+      popularity?: number;
+      trending?: number;
     }>;
   };
 
@@ -224,6 +229,8 @@ export async function fetchLiveFontshareFonts(
       openTypeFeatures: item.features?.length ? item.features : ['liga', 'kern'],
       libraryId,
       addedAt: item.addedAt || new Date().toISOString(),
+      popularityRank: item.popularity ?? 150,
+      trendingRank: item.trending ?? 150,
       starred: false,
       activated: false,
       tags: ['fontshare', classification.toLowerCase().replace(/\s+/g, '-')],

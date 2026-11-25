@@ -11,14 +11,17 @@ import {
 } from 'lucide-react';
 import {
   fetchFontPairings,
+  getSavedUserGeminiKey,
+  saveUserGeminiKey,
   type FontPairingResponse,
   type FontPairingSuggestion,
   type PairingContextPreset,
+  type PairingEngineMode,
   type SelectedFontRole,
 } from '../services/pairingService';
 import type { FontFamily, PreviewSettings, ThemeMode } from '../types/font';
 import { buildOpenTypeFeatureSettings } from '../utils/fontFilter';
-import { ensureGoogleFontLoaded } from '../utils/fontLoader';
+import { ensureFontshareFontLoaded, ensureGoogleFontLoaded } from '../utils/fontLoader';
 
 interface FontPairingAssistantProps {
   font: FontFamily;
@@ -109,6 +112,8 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
   onToggleActivate,
   onNotify,
 }) => {
+  const [engine, setEngine] = useState<PairingEngineMode>('local');
+  const [userApiKey, setUserApiKey] = useState<string>(() => getSavedUserGeminiKey());
   const [context, setContext] = useState<PairingContextPreset>('saas-ui');
   const [selectedRole, setSelectedRole] = useState<SelectedFontRole>('auto');
   const [customBrief, setCustomBrief] = useState('');
@@ -141,9 +146,9 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
     abortRef.current?.abort();
     setLoading(false);
     setError(null);
-    const key = makeCacheKey(font.id, context, selectedRole, customBrief);
+    const key = `${engine}::${makeCacheKey(font.id, context, selectedRole, customBrief)}`;
     setResult(clientPairingCache.get(key) ?? null);
-  }, [font.id, context, selectedRole, customBrief]);
+  }, [engine, font.id, context, selectedRole, customBrief]);
 
   useEffect(() => {
     return () => {
@@ -156,7 +161,9 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
     if (!result) return;
     for (const pairing of result.pairings) {
       const matched = catalogByLowerName.get(pairing.family.toLowerCase());
-      if (matched && matched.libraryId === 'lib-google') {
+      if (matched && matched.fontshareSlug) {
+        ensureFontshareFontLoaded(matched.fontshareSlug, matched.styles);
+      } else if (matched && matched.libraryId === 'lib-google') {
         ensureGoogleFontLoaded(matched.name, matched.styles);
       } else if (pairing.inGoogleCatalog) {
         ensureGoogleFontLoaded(pairing.family);
@@ -170,7 +177,7 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const key = makeCacheKey(font.id, context, selectedRole, customBrief);
+      const key = `${engine}::${makeCacheKey(font.id, context, selectedRole, customBrief)}`;
       if (!forceRefresh && clientPairingCache.has(key)) {
         setResult(clientPairingCache.get(key) ?? null);
         setError(null);
@@ -195,6 +202,9 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
             theme,
             previewText: preview.text,
             userLibraryFamilies: userCustomFamilies,
+            allFonts,
+            engine,
+            userApiKey,
             forceRefresh,
           },
           controller.signal,
@@ -216,7 +226,7 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
         }
       }
     },
-    [font, context, selectedRole, customBrief, theme, preview.text, userCustomFamilies],
+    [engine, userApiKey, allFonts, font, context, selectedRole, customBrief, theme, preview.text, userCustomFamilies],
   );
 
   const cancelAnalysis = useCallback(() => {
@@ -252,11 +262,58 @@ export const FontPairingAssistant: React.FC<FontPairingAssistantProps> = ({
           <div className="flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-[var(--color-text-primary)]" />
             <h3 className="text-[11px] font-semibold text-[var(--color-text-primary)]">
-              AI Pairing Assistant
+              Font Pairing Assistant
             </h3>
           </div>
-          <span className="text-[10px] font-code text-neutral-400">Gemini</span>
+          <span className="text-[10px] font-code text-emerald-700 dark:text-emerald-400">
+            {engine === 'local' ? 'Free · Local' : 'BYOK Gemini'}
+          </span>
         </div>
+
+        {/* Engine Switcher: Zero-Cost Local Engine (default) vs Optional User Gemini Key */}
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            onClick={() => setEngine('local')}
+            className={`h-7 px-2 rounded-md text-[11px] font-medium transition-colors cursor-pointer border ${
+              engine === 'local'
+                ? 'bg-[#1b1b1b] text-white border-[#1b1b1b] dark:bg-[#f1f1f1] dark:text-[#111111] dark:border-[#f1f1f1]'
+                : 'bg-[#F1F1F1] dark:bg-[#1B1B1B] text-neutral-700 dark:text-neutral-300 border-transparent hover:border-[var(--color-border)]'
+            }`}
+          >
+            Local Engine (Free)
+          </button>
+          <button
+            type="button"
+            onClick={() => setEngine('gemini-byok')}
+            className={`h-7 px-2 rounded-md text-[11px] font-medium transition-colors cursor-pointer border ${
+              engine === 'gemini-byok'
+                ? 'bg-[#1b1b1b] text-white border-[#1b1b1b] dark:bg-[#f1f1f1] dark:text-[#111111] dark:border-[#f1f1f1]'
+                : 'bg-[#F1F1F1] dark:bg-[#1B1B1B] text-neutral-700 dark:text-neutral-300 border-transparent hover:border-[var(--color-border)]'
+            }`}
+          >
+            Gemini AI (Your Key)
+          </button>
+        </div>
+
+        {engine === 'gemini-byok' && (
+          <div className="space-y-1">
+            <input
+              type="password"
+              value={userApiKey}
+              onChange={(e) => {
+                setUserApiKey(e.target.value);
+                saveUserGeminiKey(e.target.value);
+              }}
+              placeholder="Paste your Gemini API key (stored locally only)…"
+              aria-label="Personal Gemini API key"
+              className="w-full h-7 px-2.5 rounded-lg bg-[#F1F1F1] dark:bg-[#1B1B1B] border border-[var(--color-border)] text-[11px] font-code text-[var(--color-text-primary)] outline-none focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1] select-text"
+            />
+            <p className="text-[10px] text-neutral-500 dark:text-neutral-400">
+              Calls Gemini directly from your device using your own key — never leaves your browser.
+            </p>
+          </div>
+        )}
 
         {/* Layout Context Grid */}
         <div>

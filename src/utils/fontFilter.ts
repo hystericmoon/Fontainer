@@ -181,6 +181,26 @@ export function applyFontFilters(
 
   const sorted = [...filtered];
   switch (filters.sort) {
+    case 'trending':
+      sorted.sort(
+        (a, b) =>
+          (a.trendingRank ?? 99999) - (b.trendingRank ?? 99999) || a.name.localeCompare(b.name),
+      );
+      break;
+    case 'popular':
+      sorted.sort(
+        (a, b) =>
+          (a.popularityRank ?? 99999) - (b.popularityRank ?? 99999) || a.name.localeCompare(b.name),
+      );
+      break;
+    case 'newest':
+    case 'recent':
+      sorted.sort(
+        (a, b) =>
+          new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime() ||
+          a.name.localeCompare(b.name),
+      );
+      break;
     case 'name-asc':
       sorted.sort((a, b) => a.name.localeCompare(b.name));
       break;
@@ -189,13 +209,6 @@ export function applyFontFilters(
       break;
     case 'styles-desc':
       sorted.sort((a, b) => b.styles.length - a.styles.length || a.name.localeCompare(b.name));
-      break;
-    case 'recent':
-      sorted.sort(
-        (a, b) =>
-          new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime() ||
-          a.name.localeCompare(b.name),
-      );
       break;
   }
 

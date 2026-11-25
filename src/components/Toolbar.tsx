@@ -31,6 +31,7 @@ import type {
   FilterState,
   PreviewSettings,
   SortOption,
+  SpecimenLayoutMode,
   TextAlignMode,
   TextCaseMode,
   ThemeMode,
@@ -440,6 +441,26 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
           <div className="w-px h-4 bg-[var(--color-border)]" aria-hidden="true" />
 
+          {/* Specimen Layout Mode (Line / Editorial / UI Card / Poster) */}
+          <label className="hidden xl:flex items-center text-[11px] text-neutral-500 dark:text-neutral-400">
+            <span className="sr-only">Specimen layout mode</span>
+            <select
+              aria-label="Specimen layout mode"
+              value={preview.layoutMode ?? 'line'}
+              onChange={(e) =>
+                onUpdatePreview({ layoutMode: e.target.value as SpecimenLayoutMode })
+              }
+              className="h-6 px-1.5 rounded-md bg-transparent hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-[12px] text-neutral-700 dark:text-neutral-300 outline-none cursor-pointer"
+            >
+              <option value="line">Line</option>
+              <option value="editorial">Editorial</option>
+              <option value="ui-card">UI Card</option>
+              <option value="poster">Poster</option>
+            </select>
+          </label>
+
+          <div className="w-px h-4 bg-[var(--color-border)]" aria-hidden="true" />
+
           {/* Sort Select */}
           <label className="flex items-center gap-1.5 text-[11px] text-neutral-500 dark:text-neutral-400">
             <span className="sr-only">Sort fonts by</span>
@@ -449,6 +470,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               onChange={(e) => onUpdateFilters({ sort: e.target.value as SortOption })}
               className="h-6 px-1.5 rounded-md bg-transparent hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-[12px] text-neutral-700 dark:text-neutral-300 outline-none cursor-pointer"
             >
+              <option value="trending">Trending</option>
+              <option value="popular">Most Popular</option>
+              <option value="newest">Newest</option>
               <option value="name-asc">Name (A–Z)</option>
               <option value="name-desc">Name (Z–A)</option>
               <option value="styles-desc">Most Styles</option>

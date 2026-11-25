@@ -295,23 +295,88 @@ export const FontRow: React.FC<FontRowProps> = ({
         </div>
       </div>
 
-      {/* Main Live Specimen Preview Button */}
+      {/* Main Live Specimen Preview Button (Line / Editorial / UI Card / Poster) */}
       <button
         type="button"
         onClick={onSelect}
         aria-label={`Inspect ${font.name}`}
         className="w-full px-4 pt-1 pb-4 text-left block cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1b1b1b] dark:focus-visible:ring-[#f1f1f1]"
       >
-        <div
-          className={`w-full overflow-hidden text-ellipsis whitespace-nowrap transition-opacity ${
-            font.activated
-              ? 'text-neutral-950 dark:text-neutral-50'
-              : 'text-neutral-600 dark:text-neutral-400'
-          }`}
-          style={specimenStyle}
-        >
-          {specimenText}
-        </div>
+        {(preview.layoutMode ?? 'line') === 'editorial' ? (
+          <div
+            className="space-y-1.5 max-w-3xl"
+            style={{
+              fontFamily: font.cssFamily,
+              fontFeatureSettings: featureSettings,
+              fontVariationSettings: variationSettings,
+              color: preview.foregroundColor || undefined,
+            }}
+          >
+            <div className="text-[11px] uppercase tracking-[0.14em] opacity-60">
+              {font.classification} · {font.foundry}
+            </div>
+            <div
+              className="font-semibold tracking-tight leading-tight text-neutral-950 dark:text-neutral-50"
+              style={{ fontSize: `${Math.min(Math.max(preview.fontSize, 22), 46)}px` }}
+            >
+              {specimenText}
+            </div>
+            <p className="text-[15px] leading-relaxed text-neutral-600 dark:text-neutral-300">
+              Good typography is invisible until it is missing — balanced proportions, crisp counters,
+              and optical rhythm carry long-form reading effortlessly across screens.
+            </p>
+          </div>
+        ) : (preview.layoutMode ?? 'line') === 'ui-card' ? (
+          <div
+            className="max-w-xl rounded-xl border border-[var(--color-border)] bg-black/[0.02] dark:bg-white/[0.03] p-3.5 flex items-center justify-between gap-4"
+            style={{
+              fontFamily: font.cssFamily,
+              fontFeatureSettings: featureSettings,
+              fontVariationSettings: variationSettings,
+              color: preview.foregroundColor || undefined,
+            }}
+          >
+            <div className="min-w-0 space-y-1">
+              <div className="text-[11px] font-medium opacity-60">Monthly Recurring Revenue</div>
+              <div className="text-[26px] font-semibold tracking-tight leading-none text-neutral-950 dark:text-neutral-50">
+                $48,290.00
+              </div>
+              <div className="text-[12.5px] opacity-75 truncate">{specimenText}</div>
+            </div>
+            <span className="shrink-0 px-3 py-1.5 rounded-lg bg-[#1b1b1b] text-white dark:bg-[#f1f1f1] dark:text-[#111111] text-[12px] font-medium">
+              Get Started
+            </span>
+          </div>
+        ) : (preview.layoutMode ?? 'line') === 'poster' ? (
+          <div
+            className="py-1 space-y-1"
+            style={{
+              fontFamily: font.cssFamily,
+              fontFeatureSettings: featureSettings,
+              fontVariationSettings: variationSettings,
+              color: preview.foregroundColor || undefined,
+            }}
+          >
+            <div
+              className="font-bold tracking-tight leading-[1.02] text-neutral-950 dark:text-neutral-50 truncate"
+              style={{ fontSize: `${Math.min(Math.max(preview.fontSize * 1.45, 36), 78)}px` }}
+            >
+              {font.name}
+            </div>
+            <div className="text-[13px] tracking-wide opacity-70 truncate">{specimenText}</div>
+          </div>
+        ) : (
+          <div
+            className={`w-full overflow-hidden text-ellipsis whitespace-nowrap transition-opacity ${
+              font.activated
+                ? 'text-neutral-950 dark:text-neutral-50'
+                : 'text-neutral-600 dark:text-neutral-400'
+            }`}
+            style={specimenStyle}
+          >
+            {specimenText}
+          </div>
+        )}
       </button>
 
       {/* Expandable Family Styles Drawer */}

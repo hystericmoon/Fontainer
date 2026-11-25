@@ -315,6 +315,88 @@ export default function App() {
   );
   const hasMoreFonts = visibleLimit < subfolderFilteredFonts.length;
 
+  // Keyboard-first browsing: ↑/↓ step through fonts, Space toggles activation, S toggles Star
+  useEffect(() => {
+    const onBrowseKeyDown = (e: KeyboardEvent) => {
+      if (activeModal || store.destination.type === 'icons') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (renderedFonts.length === 0) return;
+
+      const curIdx = renderedFonts.findIndex((f) => f.id === store.selectedFont?.id);
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = renderedFonts[Math.min(renderedFonts.length - 1, curIdx + 1)];
+        if (next) store.setSelectedFontId(next.id);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = renderedFonts[Math.max(0, curIdx <= 0 ? 0 : curIdx - 1)];
+        if (prev) store.setSelectedFontId(prev.id);
+      } else if (e.key === ' ' && store.selectedFont) {
+        e.preventDefault();
+        store.toggleFontActivation(store.selectedFont.id);
+      } else if (e.key.toLowerCase() === 's' && store.selectedFont) {
+        e.preventDefault();
+        store.toggleStar(store.selectedFont.id);
+      }
+    };
+    window.addEventListener('keydown', onBrowseKeyDown);
+    return () => window.removeEventListener('keydown', onBrowseKeyDown);
+  }, [activeModal, renderedFonts, store]);
+
+  const handleExportListDevHandoff = async (listId: string) => {
+    const list = store.fontLists.find((l) => l.id === listId);
+    if (!list || list.fontIds.length === 0) {
+      store.showToast('Add fonts to this list before exporting');
+      return;
+    }
+    const items = list.fontIds
+      .map((id) => store.fonts.find((f) => f.id === id))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f));
+    const googleLinks = items
+      .filter((f) => f.libraryId === 'lib-google')
+      .map(
+        (f) =>
+          `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=${encodeURIComponent(f.name).replace(/%20/g, '+')}:wght@400;600;700&display=swap" />`,
+      );
+    const fontshareLinks = items
+      .filter((f) => f.fontshareSlug)
+      .map(
+        (f) =>
+          `<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=${f.fontshareSlug}@400,600,700&display=swap" />`,
+      );
+    const cssVars = items.map(
+      (f, idx) =>
+        `  --font-${idx === 0 ? 'primary' : idx === 1 ? 'secondary' : `accent-${idx}`}: ${f.cssFamily};`,
+    );
+    const snippet = [
+      `<!-- Fontainer Dev Handoff: ${list.name} -->`,
+      ...googleLinks,
+      ...fontshareLinks,
+      '',
+      '<style>',
+      ':root {',
+      ...cssVars,
+      '}',
+      '</style>',
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(snippet);
+      store.showToast(`Copied Dev Handoff (<link> + CSS) for "${list.name}"`);
+    } catch {
+      store.showToast('Dev Handoff snippet ready');
+    }
+  };
+
   const handleShareFontList = async (listId: string) => {
     const list = store.fontLists.find((l) => l.id === listId);
     if (!list || list.fontIds.length === 0) {
@@ -376,6 +458,7 @@ export default function App() {
             onDeleteList={store.deleteFontList}
             onActivateAllInList={store.activateAllInList}
             onShareList={(id) => void handleShareFontList(id)}
+            onExportListDevHandoff={(id) => void handleExportListDevHandoff(id)}
             onDeleteSmartList={store.deleteSmartList}
             onSyncLibrary={store.syncLibrary}
             onActivateAllInLibrary={(libId, active) => void store.activateAllInLibrary(libId, active)}

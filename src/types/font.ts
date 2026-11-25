@@ -19,7 +19,16 @@ export type TextCaseMode = 'none' | 'uppercase' | 'lowercase' | 'capitalize';
 
 export type TextAlignMode = 'left' | 'center' | 'right';
 
-export type SortOption = 'name-asc' | 'name-desc' | 'styles-desc' | 'recent';
+export type SortOption =
+  | 'trending'
+  | 'popular'
+  | 'newest'
+  | 'name-asc'
+  | 'name-desc'
+  | 'styles-desc'
+  | 'recent';
+
+export type SpecimenLayoutMode = 'line' | 'editorial' | 'ui-card' | 'poster';
 
 export type LibraryProvider =
   | 'local'
@@ -68,6 +77,8 @@ export interface FontFamily {
   openTypeFeatures: string[];
   libraryId: string;
   addedAt: string;
+  popularityRank?: number;
+  trendingRank?: number;
   starred: boolean;
   activated: boolean;
   tags: string[];
@@ -172,6 +183,7 @@ export interface PreviewSettings {
   backgroundColor: string;
   openType: OpenTypeState;
   variableAxes?: VariableAxesState;
+  layoutMode?: SpecimenLayoutMode;
 }
 
 export interface DuplicateGroup {

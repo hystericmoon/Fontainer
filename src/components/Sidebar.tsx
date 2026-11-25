@@ -57,6 +57,7 @@ interface SidebarProps {
   onDeleteList: (id: string) => void;
   onActivateAllInList: (id: string, active: boolean) => void;
   onShareList?: (id: string) => void;
+  onExportListDevHandoff?: (id: string) => void;
   onDeleteSmartList: (id: string) => void;
   onSyncLibrary: (id: string) => void;
   onActivateAllInLibrary?: (id: string, active: boolean) => void;
@@ -101,6 +102,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteList,
   onActivateAllInList,
   onShareList,
+  onExportListDevHandoff,
   onDeleteSmartList,
   onSyncLibrary,
   onActivateAllInLibrary,
@@ -501,6 +503,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         >
                           <Share2 className="w-3 h-3" />
                           <span>Copy Share Link</span>
+                        </button>
+                      )}
+                      {onExportListDevHandoff && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            onExportListDevHandoff(list.id);
+                            setOpenMenuListId(null);
+                          }}
+                          className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
+                        >
+                          Copy Dev Handoff
                         </button>
                       )}
                       <div className="my-1 border-t border-[var(--color-border)]" />

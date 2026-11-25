@@ -22,6 +22,7 @@ interface GoogleFontCatalogItem {
   version: string;
   lastModified: string;
   popularity: number;
+  trending: number;
 }
 
 interface CachedCatalog {
@@ -42,6 +43,8 @@ interface FontshareCatalogItem {
   features: string[];
   version: string;
   addedAt: string;
+  popularity: number;
+  trending: number;
 }
 
 interface CachedFontshareCatalog {
@@ -213,6 +216,7 @@ async function loadGoogleFontsFromUpstream(): Promise<CachedCatalog> {
           version: item.version || 'v1',
           lastModified: item.lastModified || new Date().toISOString().slice(0, 10),
           popularity: idx + 1,
+          trending: idx + 1,
         }));
         if (items.length > 0) {
           return {
@@ -249,6 +253,7 @@ async function loadGoogleFontsFromUpstream(): Promise<CachedCatalog> {
       fonts?: Record<string, unknown>;
       lastModified?: string;
       popularity?: number;
+      trending?: number;
     }>;
   };
 
@@ -266,6 +271,7 @@ async function loadGoogleFontsFromUpstream(): Promise<CachedCatalog> {
       version: 'Live',
       lastModified: f.lastModified || new Date().toISOString().slice(0, 10),
       popularity: f.popularity ?? idx + 1,
+      trending: f.trending ?? f.popularity ?? idx + 1,
     }));
 
   return {
@@ -333,6 +339,10 @@ async function fetchLiveFontshareCatalog(): Promise<CachedFontshareCatalog> {
         category?: string;
         version?: string;
         inserted_at?: string;
+        views?: number;
+        views_recent?: number;
+        is_hot?: boolean;
+        is_top?: boolean;
         designers?: Array<{ name?: string }>;
         publisher?: { name?: string };
         axes?: Array<{ tag?: string }>;
@@ -382,6 +392,12 @@ async function fetchLiveFontshareCatalog(): Promise<CachedFontshareCatalog> {
           features: features.length > 0 ? features : ['liga', 'kern'],
           version: f.version || '1.0',
           addedAt: f.inserted_at || new Date().toISOString(),
+          popularity: f.views ? Math.max(1, Math.round(10_000_000 / Math.max(1, f.views))) : f.is_top ? 25 : 200,
+          trending: f.views_recent
+            ? Math.max(1, Math.round(1_000_000 / Math.max(1, f.views_recent)))
+            : f.is_hot
+              ? 15
+              : 250,
         };
       });
 
