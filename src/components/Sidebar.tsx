@@ -29,7 +29,7 @@ import {
 import type { DesktopUpdateInfo } from '../services/desktopFontActivator';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
 import { GoogleSignInButton } from './CloudConnectionsModal';
-import { ICON_CATALOG } from './IconLibraryView';
+import { TOTAL_ICON_COUNT } from './IconLibraryView';
 
 interface SidebarProps {
   destination: SidebarDestination;
@@ -61,7 +61,7 @@ interface SidebarProps {
   onExportListDevHandoff?: (id: string) => void;
   onDeleteSmartList: (id: string) => void;
   onSyncLibrary: (id: string) => void;
-  onActivateAllInLibrary?: (id: string, active: boolean) => void;
+  onActivateAllInLibrary?: (id: string, active: boolean, topLimit?: number) => void;
   onDropFontOnList: (listId: string, fontId: string) => void;
   showInstallAction?: boolean;
   onOpenInstall?: () => void;
@@ -163,7 +163,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { dest: { type: 'deactivated' }, label: 'Deactivated', count: counts.deactivated, icon: <MinusCircle className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'starred' }, label: 'Starred', count: counts.starred, icon: <Star className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'recent' }, label: 'Recently Added', count: counts.recent, icon: <Clock className="w-3.5 h-3.5 shrink-0" /> },
-    { dest: { type: 'icons' }, label: 'Icon Sets', count: ICON_CATALOG.length, icon: <Sparkles className="w-3.5 h-3.5 shrink-0" /> },
+    { dest: { type: 'icons' }, label: 'Icon Sets', count: TOTAL_ICON_COUNT, icon: <Sparkles className="w-3.5 h-3.5 shrink-0" /> },
   ];
 
   const getLibraryIcon = (provider: FontLibrary['provider']) => {
@@ -276,11 +276,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span className="truncate">{lib.name}</span>
                   </button>
                   <div className="flex items-center gap-1 pr-2.5 shrink-0">
-                    {onActivateAllInLibrary && lib.id !== 'lib-google' && (
+                    {onActivateAllInLibrary && (
                       <button
                         type="button"
                         aria-label={`Actions for ${lib.name}`}
-                        title={`Activate or Deactivate all in ${lib.name}`}
+                        title={`Activate or Deactivate fonts in ${lib.name}`}
                         onClick={() => setOpenMenuLibId((cur) => (cur === lib.id ? null : lib.id))}
                         className={`opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded transition-opacity cursor-pointer ${
                           active
@@ -311,8 +311,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div
                       role="menu"
                       aria-label={`${lib.name} menu`}
-                      className="absolute right-2 top-8 z-30 w-44 py-1 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] shadow-lg text-[12px]"
+                      className="absolute right-2 top-8 z-30 w-52 py-1 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] shadow-lg text-[12px]"
                     >
+                      {lib.id === 'lib-google' && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            onActivateAllInLibrary(lib.id, true, 100);
+                            setOpenMenuLibId(null);
+                          }}
+                          className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
+                        >
+                          Activate Top 100 Popular
+                        </button>
+                      )}
                       <button
                         type="button"
                         role="menuitem"
@@ -322,7 +335,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         }}
                         className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
                       >
-                        Activate All Fonts
+                        Activate All (Skip Duplicates)
                       </button>
                       <button
                         type="button"

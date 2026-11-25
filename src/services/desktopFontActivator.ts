@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.3.0';
 export const GITHUB_REPO = 'hystericmoon/Fontainer';
 export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
 export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
@@ -374,6 +374,21 @@ export async function batchActivateDriveFonts(
   if (!isTauriDesktop()) return null;
   return invoke<BatchActivationSummary>('batch_activate_drive_fonts', {
     accessToken,
+    items,
+  });
+}
+
+export interface GoogleBatchFontItem {
+  fontId: string;
+  familyName: string;
+  styles: Array<{ weight: number; italic: boolean }>;
+}
+
+export async function batchActivateGoogleFonts(
+  items: GoogleBatchFontItem[],
+): Promise<BatchActivationSummary | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<BatchActivationSummary>('batch_activate_google_fonts', {
     items,
   });
 }

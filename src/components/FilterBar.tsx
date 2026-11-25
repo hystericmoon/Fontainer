@@ -28,7 +28,22 @@ const CLASSIFICATIONS: Array<FontClassification | 'All'> = [
 const FORMATS: Array<FontFormat | 'All'> = ['All', 'Variable', 'OTF', 'TTF', 'WOFF2'];
 const WIDTHS: Array<FontWidth | 'All'> = ['All', 'Condensed', 'Normal', 'Expanded'];
 const WEIGHTS: Array<FilterState['weightFilter']> = ['All', 'Light', 'Regular', 'Bold'];
-const LANGUAGES = ['All', 'Latin', 'Latin Extended', 'Cyrillic', 'Greek', 'Vietnamese'];
+const LANGUAGES = [
+  'All',
+  'Latin',
+  'Latin Ext',
+  'Arabic',
+  'Cyrillic',
+  'Greek',
+  'Japanese',
+  'Korean',
+  'Chinese Simplified',
+  'Devanagari',
+  'Vietnamese',
+  'Hebrew',
+  'Thai',
+  'Bengali',
+];
 const STATUSES: Array<FilterState['status']> = ['All', 'Activated', 'Deactivated'];
 
 export const FilterBar: React.FC<FilterBarProps> = ({ filters, onUpdate, activeCount }) => {

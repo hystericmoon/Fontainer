@@ -96,6 +96,7 @@ pub fn run() {
             font_activator::open_os_fonts_folder,
             font_activator::scan_system_fonts,
             font_activator::batch_activate_drive_fonts,
+            font_activator::batch_activate_google_fonts,
             font_activator::batch_deactivate_os_fonts,
             font_activator::detect_local_google_drive_folders,
             font_activator::activate_local_drive_folder_zero_copy,

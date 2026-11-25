@@ -1519,6 +1519,230 @@ pub async fn batch_activate_drive_fonts(
     })
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleBatchFontItem {
+    pub font_id: String,
+    pub family_name: String,
+    pub styles: Vec<GoogleFontStyleInput>,
+}
+
+/// RightFont-style zero-lag parallel batch activator for Google Fonts:
+/// 8 concurrent workers + disk cache + single OS refresh broadcast + live progress events.
+#[tauri::command]
+pub async fn batch_activate_google_fonts(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    items: Vec<GoogleBatchFontItem>,
+) -> Result<BatchActivationSummary, String> {
+    let total = items.len();
+    if total == 0 {
+        return Ok(BatchActivationSummary {
+            activated: 0,
+            skipped: 0,
+            failed: 0,
+            auth_expired: false,
+            active_font_ids: Vec::new(),
+        });
+    }
+
+    let fonts_dir = resolve_os_fonts_dir()?;
+    let manifest_path = resolve_manifest_path(&app)?;
+    fs::create_dir_all(&fonts_dir).map_err(|e| format!("Failed creating fonts dir: {e}"))?;
+
+    let session_only = state.session_only.load(Ordering::Relaxed);
+    let already_active = {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let manifest = load_manifest(&manifest_path);
+        manifest.entries.keys().cloned().collect::<HashSet<String>>()
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent("Mozilla/5.0 (compatible; FontainerDesktop/1.3)")
+        .build()
+        .map_err(|e| format!("Failed initializing HTTP client: {e}"))?;
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(8));
+    let done_counter = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(total);
+
+    for item in items {
+        if already_active.contains(&item.font_id) {
+            let done = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app.emit(
+                "font-sync-progress",
+                BatchProgressPayload {
+                    phase: "activate".to_string(),
+                    completed: done,
+                    total,
+                    current_name: item.family_name.clone(),
+                },
+            );
+            continue;
+        }
+
+        let sem = semaphore.clone();
+        let client = client.clone();
+        let app_clone = app.clone();
+        let fonts_dir_clone = fonts_dir.clone();
+        let done_counter = done_counter.clone();
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.ok()?;
+            let safe_id = sanitize_segment(&item.font_id);
+            let font_cache_dir = resolve_font_cache_dir(&app_clone, &safe_id).ok()?;
+
+            // 1. Check local disk cache first
+            let mut files_to_install: Vec<(String, Vec<u8>)> = Vec::new();
+            if font_cache_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&font_cache_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if path.is_file()
+                            && (name.to_ascii_lowercase().ends_with(".ttf")
+                                || name.to_ascii_lowercase().ends_with(".otf"))
+                        {
+                            if let Ok(bytes) = fs::read(&path) {
+                                if !bytes.is_empty() {
+                                    files_to_install.push((name, bytes));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Otherwise fetch CSS2 -> .ttf files from fonts.gstatic.com
+            if files_to_install.is_empty() {
+                let css_url = build_google_css2_url(&item.family_name, &item.styles);
+                let css_resp = client.get(&css_url).send().await.ok()?;
+                if !css_resp.status().is_success() {
+                    return None;
+                }
+                let css_text = css_resp.text().await.ok()?;
+                let faces = extract_google_ttf_faces(&css_text);
+                if faces.is_empty() {
+                    return None;
+                }
+                let _ = fs::create_dir_all(&font_cache_dir);
+                for (idx, face) in faces.into_iter().take(12).enumerate() {
+                    let resp = match client.get(&face.url).send().await {
+                        Ok(r) if r.status().is_success() => r,
+                        _ => continue,
+                    };
+                    let bytes = match resp.bytes().await {
+                        Ok(b) if !b.is_empty() && b.len() <= 20 * 1024 * 1024 => b.to_vec(),
+                        _ => continue,
+                    };
+                    let ext = if face.url.to_ascii_lowercase().ends_with(".otf") {
+                        "otf"
+                    } else {
+                        "ttf"
+                    };
+                    let style_tag = if face.italic {
+                        format!("{}i", face.weight)
+                    } else {
+                        face.weight
+                    };
+                    let fname = format!(
+                        "{}_{}_{}.{}",
+                        sanitize_segment(&item.family_name),
+                        sanitize_segment(&style_tag),
+                        idx,
+                        ext
+                    );
+                    let _ = fs::write(font_cache_dir.join(&fname), &bytes);
+                    files_to_install.push((fname, bytes));
+                }
+            }
+
+            if files_to_install.is_empty() {
+                return None;
+            }
+
+            // 3. Install & register with OS (no per-font broadcast!)
+            let mut installed_files = Vec::new();
+            for (fname, bytes) in files_to_install {
+                let installed_name = format!("Fontainer_{safe_id}_{fname}");
+                let dest_path = fonts_dir_clone.join(&installed_name);
+                if fs::write(&dest_path, &bytes).is_err() {
+                    continue;
+                }
+                let reg_name = platform_os::register_font(&dest_path, &item.family_name)
+                    .ok()
+                    .flatten();
+                installed_files.push(InstalledFontFile {
+                    file_name: installed_name,
+                    installed_path: dest_path.to_string_lossy().to_string(),
+                    registry_name: reg_name,
+                    external_in_place: false,
+                });
+            }
+
+            if installed_files.is_empty() {
+                return None;
+            }
+
+            let done = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app_clone.emit(
+                "font-sync-progress",
+                BatchProgressPayload {
+                    phase: "activate".to_string(),
+                    completed: done,
+                    total,
+                    current_name: item.family_name.clone(),
+                },
+            );
+
+            Some(ManifestFontEntry {
+                font_id: item.font_id,
+                display_name: item.family_name,
+                source: "google".to_string(),
+                temporary: session_only,
+                files: installed_files,
+            })
+        }));
+    }
+
+    let mut newly_installed = Vec::new();
+    let mut failed = 0usize;
+    for handle in handles {
+        match handle.await {
+            Ok(Some(entry)) => newly_installed.push(entry),
+            _ => failed += 1,
+        }
+    }
+
+    let activated_count = newly_installed.len();
+    let skipped_count = total.saturating_sub(activated_count + failed);
+
+    let active_font_ids = {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let mut manifest = load_manifest(&manifest_path);
+        manifest.version = 1;
+        for entry in newly_installed {
+            manifest.entries.insert(entry.font_id.clone(), entry);
+        }
+        if activated_count > 0 {
+            platform_os::broadcast_font_change();
+            save_manifest(&manifest_path, &manifest)?;
+        }
+        let mut ids: Vec<String> = manifest.entries.keys().cloned().collect();
+        ids.sort();
+        ids
+    };
+
+    Ok(BatchActivationSummary {
+        activated: activated_count,
+        skipped: skipped_count,
+        failed,
+        auth_expired: false,
+        active_font_ids,
+    })
+}
+
 /// Zero-lag batch deactivation: unregisters & removes all requested font IDs with ONE OS broadcast.
 #[tauri::command]
 pub fn batch_deactivate_os_fonts(

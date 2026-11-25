@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Fontainer Companion</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+      font-size: 12px;
+      background: var(--figma-color-bg, #ffffff);
+      color: var(--figma-color-text, #1b1b1b);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--figma-color-border, #e5e5e5);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+    .badge {
+      width: 22px; height: 22px; border-radius: 6px;
+      background: #1b1b1b; color: #fff; font-weight: 700;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .tabs {
+      display: grid; grid-template-columns: 1fr 1fr;
+      padding: 8px 12px; gap: 6px;
+      border-bottom: 1px solid var(--figma-color-border, #e5e5e5);
+    }
+    .tab {
+      height: 28px; border-radius: 7px; border: 1px solid var(--figma-color-border, #e5e5e5);
+      background: transparent; color: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer;
+    }
+    .tab.active { background: #1b1b1b; color: #fff; border-color: #1b1b1b; }
+    main { flex: 1; overflow-y: auto; padding: 12px; }
+    input[type="search"] {
+      width: 100%; height: 30px; padding: 0 10px; border-radius: 7px;
+      border: 1px solid var(--figma-color-border, #d4d4d4);
+      background: var(--figma-color-bg-secondary, #f5f5f5);
+      color: inherit; font-size: 12px; outline: none; margin-bottom: 10px;
+    }
+    .list { display: flex; flex-direction: column; gap: 6px; }
+    .row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--figma-color-border, #e5e5e5);
+      background: var(--figma-color-bg-secondary, #fafafa);
+    }
+    .name { font-weight: 600; font-size: 12px; }
+    .sub { font-size: 10.5px; opacity: 0.65; }
+    .btn {
+      height: 26px; padding: 0 10px; border-radius: 6px; border: none;
+      background: #1b1b1b; color: #fff; font-size: 11px; font-weight: 500; cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn.secondary {
+      background: transparent; color: inherit;
+      border: 1px solid var(--figma-color-border, #d4d4d4);
+    }
+    .empty { text-align: center; padding: 28px 12px; opacity: 0.7; line-height: 1.5; }
+    .status {
+      padding: 8px 12px; font-size: 11px;
+      border-top: 1px solid var(--figma-color-border, #e5e5e5);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .missing-tag { color: #d97706; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="badge">F</span> Fontainer</div>
+    <button class="btn secondary" id="rescan-btn">Rescan Page</button>
+  </header>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="scan">Page &amp; Missing</button>
+    <button class="tab" data-tab="apply">Live Apply</button>
+  </div>
+
+  <main>
+    <div id="panel-scan">
+      <div id="missing-section"></div>
+      <div id="used-section" style="margin-top: 14px;"></div>
+    </div>
+
+    <div id="panel-apply" style="display:none;">
+      <input type="search" id="search-input" placeholder="Search Fontshare, Indie, Google Fonts…" />
+      <div id="catalog-list" class="list">
+        <div class="empty">Loading live Fontainer catalog…</div>
+      </div>
+    </div>
+  </main>
+
+  <div class="status">
+    <span id="selection-info">0 text layers selected</span>
+    <a href="https://fontainer-alpha.vercel.app" target="_blank" style="color:inherit;">Open Fontainer ↗</a>
+  </div>
+
+  <script>
+    const API = 'https://fontainer-alpha.vercel.app';
+    let catalog = [];
+    let catalogLoaded = false;
+
+    document.querySelectorAll('.tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.dataset.tab;
+        document.getElementById('panel-scan').style.display = tab === 'scan' ? 'block' : 'none';
+        document.getElementById('panel-apply').style.display = tab === 'apply' ? 'block' : 'none';
+        if (tab === 'apply' && !catalogLoaded) loadCatalog();
+      });
+    });
+
+    document.getElementById('rescan-btn').addEventListener('click', () => {
+      parent.postMessage({ pluginMessage: { type: 'scan' } }, '*');
+    });
+
+    document.getElementById('search-input').addEventListener('input', renderCatalog);
+
+    async function loadCatalog() {
+      catalogLoaded = true;
+      try {
+        const [fsRes, indieRes, gfRes] = await Promise.all([
+          fetch(`${API}/api/fontshare-fonts`).then((r) => r.json()).catch(() => ({ items: [] })),
+          fetch(`${API}/api/indie-foundries`).then((r) => r.json()).catch(() => ({ items: [] })),
+          fetch(`${API}/api/google-fonts?limit=150`).then((r) => r.json()).catch(() => ({ items: [] })),
+        ]);
+        catalog = [
+          ...(indieRes.items || []).map((f) => ({ name: f.family, source: f.sourceCollection })),
+          ...(fsRes.items || []).map((f) => ({ name: f.family, source: 'Fontshare' })),
+          ...(gfRes.items || []).map((f) => ({ name: f.family, source: 'Google Fonts' })),
+        ];
+        renderCatalog();
+      } catch {
+        document.getElementById('catalog-list').innerHTML =
+          '<div class="empty">Could not reach Fontainer API.</div>';
+      }
+    }
+
+    function renderCatalog() {
+      const q = (document.getElementById('search-input').value || '').trim().toLowerCase();
+      const items = catalog.filter((c) => !q || c.name.toLowerCase().includes(q) || c.source.toLowerCase().includes(q)).slice(0, 60);
+      const container = document.getElementById('catalog-list');
+      if (items.length === 0) {
+        container.innerHTML = '<div class="empty">No matching fonts found.</div>';
+        return;
+      }
+      container.innerHTML = '';
+      for (const item of items) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `<div><div class="name">${item.name}</div><div class="sub">${item.source}</div></div>`;
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = 'Apply';
+        btn.onclick = () => parent.postMessage({ pluginMessage: { type: 'apply-font', family: item.name, style: 'Regular' } }, '*');
+        row.appendChild(btn);
+        container.appendChild(row);
+      }
+    }
+
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+      if (msg.type === 'selection-count') {
+        document.getElementById('selection-info').textContent = `${msg.count} text layer(s) selected`;
+      } else if (msg.type === 'scan-result') {
+        document.getElementById('selection-info').textContent = `${msg.selectedTextCount} text layer(s) selected`;
+        const mEl = document.getElementById('missing-section');
+        if (msg.missing.length === 0) {
+          mEl.innerHTML = '<div class="row"><div><div class="name">All page fonts active</div><div class="sub">Zero missing fonts on this page</div></div></div>';
+        } else {
+          const sharePayload = btoa(unescape(encodeURIComponent(JSON.stringify({
+            name: 'Figma Missing Fonts',
+            fonts: msg.missing.map((n) => ({ id: n.toLowerCase().replace(/[^a-z0-9]+/g, '-'), name: n })),
+          }))));
+          mEl.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span class="missing-tag">${msg.missing.length} Missing Font(s)</span>
+              <a class="btn" style="text-decoration:none;display:inline-flex;align-items:center;" target="_blank" href="${API}/?share=${encodeURIComponent(sharePayload)}">Activate in Fontainer ↗</a>
+            </div>
+            <div class="list">${msg.missing.map((n) => `<div class="row"><span class="name">${n}</span><span class="missing-tag">Missing</span></div>`).join('')}</div>
+          `;
+        }
+
+        const uEl = document.getElementById('used-section');
+        uEl.innerHTML = `<div class="sub" style="margin-bottom:6px;">Used on page (${msg.used.length})</div>` +
+          (msg.used.length
+            ? `<div class="list">${msg.used.map((n) => `<div class="row"><span class="name">${n}</span></div>`).join('')}</div>`
+            : '<div class="empty">No text layers found on this page.</div>');
+      }
+    };
+  </script>
+</body>
+</html>

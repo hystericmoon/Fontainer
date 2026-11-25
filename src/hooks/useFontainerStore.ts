@@ -27,6 +27,7 @@ import {
   activateLocalDriveFolderZeroCopy,
   activateUrlFontInOs,
   batchActivateDriveFonts,
+  batchActivateGoogleFonts,
   batchDeactivateOsFonts,
   deactivateOsFont,
   detectLocalGoogleDriveFolders,
@@ -754,12 +755,42 @@ export function useFontainerStore() {
   );
 
   const batchSetActivation = useCallback(
-    (ids: string[], activated: boolean) => {
-      if (ids.length === 0) return;
+    (
+      ids: string[],
+      activated: boolean,
+      options?: { skipDuplicates?: boolean; toastOverride?: string },
+    ) => {
+      if (ids.length === 0) return { appliedIds: [] as string[], skippedDuplicates: 0 };
       const uniqueIds = Array.from(new Set(ids));
       const fontMap = new Map(fonts.map((f) => [f.id, f]));
       const currentMeta = fontMetaRef.current;
-      const updatedBatch: CloudFontMeta[] = uniqueIds.map((fontId) => {
+
+      // When bulk activating with skipDuplicates, skip any family whose normalized name is already active
+      const activeNames = new Set<string>();
+      if (activated && options?.skipDuplicates) {
+        for (const f of fonts) {
+          if (f.activated) {
+            activeNames.add(f.name.trim().toLowerCase().replace(/\s+/g, ' '));
+          }
+        }
+      }
+
+      const targetIds: string[] = [];
+      let skippedDuplicates = 0;
+      for (const fontId of uniqueIds) {
+        const base = fontMap.get(fontId);
+        if (activated && options?.skipDuplicates && base) {
+          const norm = base.name.trim().toLowerCase().replace(/\s+/g, ' ');
+          if (!base.activated && activeNames.has(norm)) {
+            skippedDuplicates += 1;
+            continue;
+          }
+          activeNames.add(norm);
+        }
+        targetIds.push(fontId);
+      }
+
+      const updatedBatch: CloudFontMeta[] = targetIds.map((fontId) => {
         const base = fontMap.get(fontId);
         const cur: CloudFontMeta = currentMeta[fontId] ?? {
           fontId,
@@ -771,20 +802,33 @@ export function useFontainerStore() {
         return { ...cur, activated };
       });
 
-      setFontMeta((prev) => {
-        const nextMap = { ...prev };
-        for (const item of updatedBatch) {
-          nextMap[item.fontId] = item;
-        }
-        return nextMap;
-      });
+      if (updatedBatch.length > 0) {
+        setFontMeta((prev) => {
+          const nextMap = { ...prev };
+          for (const item of updatedBatch) {
+            nextMap[item.fontId] = item;
+          }
+          return nextMap;
+        });
 
-      if (user && updatedBatch.length > 0) {
-        void saveFontMetaBatch(user.uid, updatedBatch);
+        if (user) {
+          void saveFontMetaBatch(user.uid, updatedBatch);
+        }
       }
-      showToast(
-        `${activated ? 'Activated' : 'Deactivated'} ${uniqueIds.length} font ${uniqueIds.length === 1 ? 'family' : 'families'}`,
-      );
+
+      if (options?.toastOverride) {
+        showToast(options.toastOverride);
+      } else if (activated && skippedDuplicates > 0) {
+        showToast(
+          `Activated ${targetIds.length} ${targetIds.length === 1 ? 'family' : 'families'} (skipped ${skippedDuplicates} ${skippedDuplicates === 1 ? 'duplicate' : 'duplicates'})`,
+        );
+      } else {
+        showToast(
+          `${activated ? 'Activated' : 'Deactivated'} ${targetIds.length} font ${targetIds.length === 1 ? 'family' : 'families'}`,
+        );
+      }
+
+      return { appliedIds: targetIds, skippedDuplicates };
     },
     [fonts, user, showToast],
   );
@@ -937,21 +981,29 @@ export function useFontainerStore() {
     (listId: string, active: boolean) => {
       const list = fontLists.find((l) => l.id === listId);
       if (!list) return;
-      batchSetActivation(list.fontIds, active);
+      batchSetActivation(list.fontIds, active, { skipDuplicates: active });
     },
     [fontLists, batchSetActivation],
   );
 
   const activateAllInLibrary = useCallback(
-    async (libraryId: string, active: boolean) => {
-      const libFonts = fonts.filter((f) => f.libraryId === libraryId);
+    async (libraryId: string, active: boolean, topLimit?: number) => {
+      let libFonts = fonts.filter((f) => f.libraryId === libraryId);
       if (libFonts.length === 0) {
         showToast('No fonts in this library yet');
         return;
       }
 
+      if (active && topLimit && topLimit > 0) {
+        libFonts = [...libFonts]
+          .sort((a, b) => (a.popularityRank ?? 99999) - (b.popularityRank ?? 99999))
+          .slice(0, topLimit);
+      }
+
       const ids = libFonts.map((f) => f.id);
-      batchSetActivation(ids, active);
+      const { appliedIds } = batchSetActivation(ids, active, { skipDuplicates: active });
+      const appliedSet = new Set(appliedIds);
+      const targetFonts = active ? libFonts.filter((f) => appliedSet.has(f.id)) : libFonts;
 
       if (isDesktop && !active) {
         const osIdsToRemove: string[] = [];
@@ -968,10 +1020,35 @@ export function useFontainerStore() {
         } catch {
           // reconcile loop will retry cleanly
         }
+      } else if (isDesktop && active && libraryId === 'lib-google') {
+        const batchItems = targetFonts.map((f) => ({
+          fontId: f.id,
+          familyName: f.name,
+          styles: f.styles.map((s) => ({ weight: s.weight, italic: s.italic })),
+        }));
+        if (batchItems.length > 0) {
+          setBulkProgress({
+            label: `Activating ${batchItems.length.toLocaleString()} Google Fonts (parallel)`,
+            completed: 0,
+            total: batchItems.length,
+          });
+          try {
+            const summary = await batchActivateGoogleFonts(batchItems);
+            if (summary) {
+              osActiveIdsRef.current = new Set(summary.activeFontIds);
+              setOsActiveCount(summary.activeFontIds.length);
+              showToast(
+                `Activated ${summary.activated + summary.skipped} Google Fonts in OS with zero lag`,
+              );
+            }
+          } finally {
+            setBulkProgress(null);
+          }
+        }
       } else if (isDesktop && active && libraryId === 'lib-gdrive') {
         const token = getGoogleDriveAccessToken() ?? '';
         const batchItems: DriveBatchFontItem[] = [];
-        for (const f of libFonts) {
+        for (const f of targetFonts) {
           if (f.driveFiles && f.driveFiles.length > 0) {
             for (const df of f.driveFiles) {
               batchItems.push({

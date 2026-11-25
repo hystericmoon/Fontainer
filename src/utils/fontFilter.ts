@@ -167,8 +167,17 @@ export function applyFontFilters(
       return false;
     }
 
-    if (filters.language !== 'All' && !font.languages.includes(filters.language)) {
-      return false;
+    if (filters.language !== 'All') {
+      const targetLang = filters.language.toLowerCase();
+      const hasMatch = font.languages.some((l) => {
+        const lower = l.toLowerCase();
+        if (lower === targetLang) return true;
+        if (targetLang === 'latin ext' && (lower === 'latin extended' || lower === 'latin ext')) {
+          return true;
+        }
+        return lower.startsWith(`${targetLang} `);
+      });
+      if (!hasMatch) return false;
     }
 
     if (filters.status === 'Activated' && !font.activated) return false;

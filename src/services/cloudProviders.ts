@@ -141,11 +141,15 @@ export async function fetchLiveGoogleFonts(
       isVariable,
       license: 'SIL OFL 1.1 / Apache 2.0',
       version: item.version,
-      languages: item.subsets.slice(0, 6).map((s) =>
-        s
-          .split('-')
-          .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
-          .join(' '),
+      languages: Array.from(
+        new Set(
+          item.subsets.map((s) =>
+            s
+              .split('-')
+              .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ''))
+              .join(' '),
+          ),
+        ),
       ),
       openTypeFeatures: isVariable ? ['liga', 'kern', 'tnum', ...item.axes] : ['liga', 'kern'],
       libraryId,

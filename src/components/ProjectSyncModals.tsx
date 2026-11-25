@@ -99,6 +99,20 @@ export const SharedStackModal: React.FC<SharedStackModalProps> = ({
           ))}
         </div>
 
+        <div className="p-2.5 rounded-lg bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] flex items-center justify-between gap-2 text-[11.5px]">
+          <span className="text-[var(--color-text-secondary)]">
+            Want live 1-click scanning &amp; font apply inside Figma?
+          </span>
+          <a
+            href="https://github.com/hystericmoon/Fontainer/tree/main/plugins/fontainer-figma"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-[var(--color-text-primary)] hover:underline shrink-0"
+          >
+            Install Figma Plugin ↗
+          </a>
+        </div>
+
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-[11.5px] text-[var(--color-text-secondary)]">
             {matchedIds.length} of {stack.fonts.length} fonts ready
@@ -278,6 +292,20 @@ export const MissingFontsModal: React.FC<MissingFontsModalProps> = ({
             ))}
           </div>
         )}
+
+        <div className="p-2.5 rounded-lg bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] flex items-center justify-between gap-2 text-[11.5px]">
+          <span className="text-[var(--color-text-secondary)]">
+            Want live 1-click scanning &amp; font apply inside Figma?
+          </span>
+          <a
+            href="https://github.com/hystericmoon/Fontainer/tree/main/plugins/fontainer-figma"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-[var(--color-text-primary)] hover:underline shrink-0"
+          >
+            Install Figma Plugin ↗
+          </a>
+        </div>
 
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-[11.5px] text-[var(--color-text-secondary)]">

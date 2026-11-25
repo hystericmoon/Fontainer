@@ -567,18 +567,60 @@ export const PreferencesModal: React.FC<{
   </SheetBackdrop>
 );
 
-/* 6. Duplicate Font Finder Modal */
+/* 6. Duplicate Font Finder Modal (with 1-Click Bulk Resolve by Source) */
 export const DuplicateFinderModal: React.FC<{
   groups: DuplicateGroup[];
   libraries: FontLibrary[];
   onDeactivate: (fontId: string) => void;
+  onBulkDeactivate: (fontIds: string[], label?: string) => void;
   onRemove: (fontId: string) => void;
   onClose: () => void;
-}> = ({ groups, libraries, onDeactivate, onRemove, onClose }) => {
+}> = ({ groups, libraries, onDeactivate, onBulkDeactivate, onRemove, onClose }) => {
   const getLibName = (id: string) => libraries.find((l) => l.id === id)?.name ?? 'Library';
 
+  // Count active duplicate copies per library so users can bulk-deactivate by source in 1 click
+  const libraryDupSummary = useMemo(() => {
+    const counts = new Map<string, { libId: string; libName: string; activeIds: string[]; totalIds: string[] }>();
+    for (const group of groups) {
+      for (const font of group.fonts) {
+        const entry = counts.get(font.libraryId) ?? {
+          libId: font.libraryId,
+          libName: getLibName(font.libraryId),
+          activeIds: [],
+          totalIds: [],
+        };
+        entry.totalIds.push(font.id);
+        if (font.activated) entry.activeIds.push(font.id);
+        counts.set(font.libraryId, entry);
+      }
+    }
+    return Array.from(counts.values()).sort((a, b) => b.activeIds.length - a.activeIds.length || b.totalIds.length - a.totalIds.length);
+  }, [groups, libraries]);
+
+  // Smart Keep Best: keeps highest-priority copy per group & collects all other active duplicate IDs
+  const smartExtraActiveIds = useMemo(() => {
+    const priority = (libId: string) => {
+      if (libId === 'lib-local' || libId.startsWith('lib-folder')) return 1;
+      if (libId.startsWith('lib-gdrive')) return 2;
+      if (libId === 'lib-collletttivo' || libId === 'lib-openfoundry' || libId === 'lib-uncut') return 3;
+      if (libId === 'lib-fontshare') return 4;
+      if (libId === 'lib-google') return 5;
+      return 3;
+    };
+    const toDeactivate: string[] = [];
+    for (const group of groups) {
+      const activeInGroup = group.fonts.filter((f) => f.activated);
+      if (activeInGroup.length <= 1) continue;
+      const sorted = [...activeInGroup].sort((a, b) => priority(a.libraryId) - priority(b.libraryId));
+      for (let i = 1; i < sorted.length; i += 1) {
+        toDeactivate.push(sorted[i].id);
+      }
+    }
+    return toDeactivate;
+  }, [groups]);
+
   return (
-    <SheetBackdrop title="Duplicate Font Finder" onClose={onClose} width={560}>
+    <SheetBackdrop title="Duplicate Font Finder" onClose={onClose} width={600}>
       {groups.length === 0 ? (
         <div className="py-8 text-center">
           <p className="text-[14px] font-medium text-[var(--color-text-primary)]">
@@ -589,11 +631,54 @@ export const DuplicateFinderModal: React.FC<{
           </p>
         </div>
       ) : (
-        <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-          <p className="text-[12px] text-neutral-500 dark:text-neutral-400">
-            Found {groups.length} duplicate family {groups.length === 1 ? 'conflict' : 'conflicts'}.
-            Resolve by deactivating or removing the redundant copy.
-          </p>
+        <div className="space-y-4 max-h-[66vh] overflow-y-auto pr-0.5">
+          {/* Bulk Resolve Bar */}
+          <div className="p-3.5 rounded-xl bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] space-y-2.5">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <div className="text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+                  Bulk Resolve ({groups.length} duplicate {groups.length === 1 ? 'family' : 'families'})
+                </div>
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Deactivate redundant copies by source in 1 click instead of one-by-one.
+                </p>
+              </div>
+              {smartExtraActiveIds.length > 0 && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  label={`Keep Best Copy (${smartExtraActiveIds.length} off)`}
+                  onClick={() =>
+                    onBulkDeactivate(
+                      smartExtraActiveIds,
+                      `Kept best copy & deactivated ${smartExtraActiveIds.length} active duplicates`,
+                    )
+                  }
+                />
+              )}
+            </div>
+
+            {libraryDupSummary.some((item) => item.activeIds.length > 0) && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[var(--color-border)]">
+                {libraryDupSummary
+                  .filter((item) => item.activeIds.length > 0)
+                  .map((item) => (
+                    <Button
+                      key={item.libId}
+                      variant="secondary"
+                      size="sm"
+                      label={`Deactivate ${item.activeIds.length} in ${item.libName}`}
+                      onClick={() =>
+                        onBulkDeactivate(
+                          item.activeIds,
+                          `Deactivated ${item.activeIds.length} duplicate ${item.libName} copies`,
+                        )
+                      }
+                    />
+                  ))}
+              </div>
+            )}
+          </div>
 
           {groups.map((group) => (
             <div
@@ -635,12 +720,14 @@ export const DuplicateFinderModal: React.FC<{
                           onClick={() => onDeactivate(font.id)}
                         />
                       )}
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        label="Remove Copy"
-                        onClick={() => onRemove(font.id)}
-                      />
+                      {font.isCustomUpload && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          label="Remove Copy"
+                          onClick={() => onRemove(font.id)}
+                        />
+                      )}
                     </div>
                   </div>
                 ))}

@@ -19,7 +19,7 @@ import { CompareView } from './components/CompareView';
 import { FilterBar } from './components/FilterBar';
 import { FontGrid } from './components/FontGrid';
 import { FontRow } from './components/FontRow';
-import { ICON_CATALOG, IconLibraryView } from './components/IconLibraryView';
+import { IconLibraryView, TOTAL_ICON_COUNT } from './components/IconLibraryView';
 import { InspectorPanel } from './components/InspectorPanel';
 import { InstallMacModal } from './components/InstallMacModal';
 import {
@@ -463,7 +463,9 @@ export default function App() {
             onExportListDevHandoff={(id) => void handleExportListDevHandoff(id)}
             onDeleteSmartList={store.deleteSmartList}
             onSyncLibrary={store.syncLibrary}
-            onActivateAllInLibrary={(libId, active) => void store.activateAllInLibrary(libId, active)}
+            onActivateAllInLibrary={(libId, active, topLimit) =>
+              void store.activateAllInLibrary(libId, active, topLimit)
+            }
             onDropFontOnList={(listId, fontId) => store.addFontsToList(listId, [fontId])}
             showInstallAction={!pwa.isInstalled && !store.isDesktop}
             onOpenInstall={() => setActiveModal('install-mac')}
@@ -571,7 +573,7 @@ export default function App() {
           <Toolbar
             title={currentTitle}
             resultCount={
-              store.destination.type === 'icons' ? ICON_CATALOG.length : store.visibleFonts.length
+              store.destination.type === 'icons' ? TOTAL_ICON_COUNT : store.visibleFonts.length
             }
             resultUnit={store.destination.type === 'icons' ? 'icons' : undefined}
             sidebarOpen={sidebarOpen}
@@ -989,6 +991,9 @@ export default function App() {
             groups={store.duplicateGroups}
             libraries={store.libraries}
             onDeactivate={store.toggleFontActivation}
+            onBulkDeactivate={(ids, label) =>
+              store.batchSetActivation(ids, false, { toastOverride: label })
+            }
             onRemove={store.removeFontFamily}
             onClose={() => setActiveModal(null)}
           />
