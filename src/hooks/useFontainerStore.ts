@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   DEFAULT_PREVIEW_SETTINGS,
-  INITIAL_APP_INTEGRATIONS,
   INITIAL_FONT_LISTS,
   INITIAL_LIBRARIES,
   INITIAL_SMART_LISTS,
@@ -40,7 +39,6 @@ import {
 } from '../services/firestoreSync';
 import type {
   AdobeKitRecord,
-  AppIntegration,
   FilterState,
   FontFamily,
   FontLibrary,
@@ -76,7 +74,6 @@ interface LocalPersistedState {
   smartLists: SmartList[];
   adobeKits: AdobeKitRecord[];
   fontMeta: Record<string, CloudFontMeta>;
-  appIntegrations: AppIntegration[];
   preview: PreviewSettings;
   theme: ThemeMode;
   compareIds: string[];
@@ -90,7 +87,6 @@ function loadLocalState(): LocalPersistedState {
     smartLists: INITIAL_SMART_LISTS,
     adobeKits: [],
     fontMeta: {},
-    appIntegrations: INITIAL_APP_INTEGRATIONS,
     preview: DEFAULT_PREVIEW_SETTINGS,
     theme: 'light',
     compareIds: [],
@@ -119,9 +115,6 @@ function loadLocalState(): LocalPersistedState {
         : INITIAL_SMART_LISTS,
       adobeKits: Array.isArray(parsed.adobeKits) ? parsed.adobeKits : [],
       fontMeta: parsed.fontMeta && typeof parsed.fontMeta === 'object' ? parsed.fontMeta : {},
-      appIntegrations: Array.isArray(parsed.appIntegrations)
-        ? parsed.appIntegrations
-        : INITIAL_APP_INTEGRATIONS,
       preview: parsed.preview
         ? {
             ...DEFAULT_PREVIEW_SETTINGS,
@@ -163,7 +156,6 @@ export function useFontainerStore() {
   const [fontLists, setFontLists] = useState<FontList[]>(initial.fontLists);
   const [smartLists, setSmartLists] = useState<SmartList[]>(initial.smartLists);
   const [fontMeta, setFontMeta] = useState<Record<string, CloudFontMeta>>(initial.fontMeta);
-  const [appIntegrations, setAppIntegrations] = useState<AppIntegration[]>(initial.appIntegrations);
   const [preview, setPreview] = useState<PreviewSettings>(initial.preview);
   const [theme, setTheme] = useState<ThemeMode>(initial.theme);
   const [compareIds, setCompareIds] = useState<string[]>(initial.compareIds);
@@ -380,7 +372,6 @@ export function useFontainerStore() {
           smartLists,
           adobeKits,
           fontMeta,
-          appIntegrations,
           preview,
           theme,
           compareIds,
@@ -408,7 +399,6 @@ export function useFontainerStore() {
     smartLists,
     adobeKits,
     fontMeta,
-    appIntegrations,
     preview,
     theme,
     compareIds,
@@ -1083,26 +1073,6 @@ export function useFontainerStore() {
 
   const clearCheckedFonts = useCallback(() => setCheckedFontIds([]), []);
 
-  const toggleAppAutoActivate = useCallback((appId: string) => {
-    setAppIntegrations((prev) =>
-      prev.map((a) => (a.id === appId ? { ...a, autoActivate: !a.autoActivate } : a)),
-    );
-  }, []);
-
-  const applyFontToApp = useCallback(
-    (appId: string, font: FontFamily) => {
-      const target = appIntegrations.find((a) => a.id === appId);
-      setAppIntegrations((prev) =>
-        prev.map((a) => (a.id === appId ? { ...a, lastAppliedFont: font.name } : a)),
-      );
-      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        void navigator.clipboard.writeText(`font-family: ${font.cssFamily};`);
-      }
-      showToast(`Copied "${font.name}" CSS for ${target?.name ?? 'app'}`);
-    },
-    [appIntegrations, showToast],
-  );
-
   const updatePreview = useCallback(
     (patch: Partial<PreviewSettings>) => {
       setPreview((prev) => {
@@ -1193,7 +1163,6 @@ export function useFontainerStore() {
     libraries,
     fontLists,
     smartLists,
-    appIntegrations,
     preview,
     theme,
     setTheme: handleSetTheme,
@@ -1239,8 +1208,6 @@ export function useFontainerStore() {
     addLibrary,
     syncLibrary,
     importLocalFonts,
-    toggleAppAutoActivate,
-    applyFontToApp,
     updatePreview,
     updateOpenType,
     resetAllData,

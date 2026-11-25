@@ -66,7 +66,7 @@ function parseGoogleVariants(familySlug: string, familyName: string, variants: s
       italic,
       postScriptName: `${psBase}-${name.replace(/\s+/g, '')}`,
       activated: false,
-      fileSizeKb: 48,
+      fileSizeKb: 0,
     });
   }
 
@@ -78,7 +78,7 @@ function parseGoogleVariants(familySlug: string, familyName: string, variants: s
       italic: false,
       postScriptName: `${psBase}-Regular`,
       activated: false,
-      fileSizeKb: 48,
+      fileSizeKb: 0,
     });
   }
 

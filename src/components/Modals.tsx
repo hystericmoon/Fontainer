@@ -13,7 +13,6 @@ import {
   X,
 } from 'lucide-react';
 import type {
-  AppIntegration,
   DuplicateGroup,
   FontFamily,
   FontLibrary,
@@ -512,11 +511,9 @@ export const ImportFontsModal: React.FC<{
 export const PreferencesModal: React.FC<{
   theme: ThemeMode;
   onSetTheme: (theme: ThemeMode) => void;
-  appIntegrations: AppIntegration[];
-  onToggleApp: (id: string) => void;
   onResetLibrary: () => void;
   onClose: () => void;
-}> = ({ theme, onSetTheme, appIntegrations, onToggleApp, onResetLibrary, onClose }) => (
+}> = ({ theme, onSetTheme, onResetLibrary, onClose }) => (
   <SheetBackdrop title="Fontainer Preferences" onClose={onClose} width={520}>
     <div className="space-y-5 text-[12px]">
       <section>
@@ -549,43 +546,17 @@ export const PreferencesModal: React.FC<{
         </div>
       </section>
 
-      <section>
-        <h3 className="text-[12px] font-semibold text-[var(--color-text-primary)] mb-2">
-          Auto-Activation Plugins
-        </h3>
-        <div className="divide-y divide-[var(--color-border)] border border-[var(--color-border)] rounded-xl overflow-hidden">
-          {appIntegrations.map((app) => (
-            <div
-              key={app.id}
-              className="px-3 py-2 flex items-center justify-between bg-white dark:bg-[#1E1E1E]"
-            >
-              <div>
-                <div className="font-medium text-[var(--color-text-primary)]">{app.name}</div>
-                <div className="text-[10px] font-code text-neutral-400">{app.bundleId}</div>
-              </div>
-              <Switch
-                size="sm"
-                isLabelHidden
-                label={`Auto-activate in ${app.name}`}
-                value={app.autoActivate}
-                onChange={() => onToggleApp(app.id)}
-              />
-            </div>
-          ))}
-        </div>
-      </section>
-
       <section className="pt-3 border-t border-[var(--color-border)] flex items-center justify-between gap-3">
         <div>
-          <div className="font-medium text-[var(--color-text-primary)]">Reset Default Catalog</div>
+          <div className="font-medium text-[var(--color-text-primary)]">Clear Local Workspace Cache</div>
           <div className="text-[11px] text-neutral-500">
-            Restore original sample fonts, lists, and settings.
+            Reset local cached preferences, lists, and filters on this device.
           </div>
         </div>
         <Button
           variant="destructive"
           size="sm"
-          label="Reset Library"
+          label="Clear Cache"
           onClick={() => {
             onResetLibrary();
             onClose();

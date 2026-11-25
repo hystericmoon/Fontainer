@@ -160,15 +160,6 @@ export interface PreviewSettings {
   openType: OpenTypeState;
 }
 
-export interface AppIntegration {
-  id: string;
-  name: string;
-  bundleId: string;
-  autoActivate: boolean;
-  detected: boolean;
-  lastAppliedFont?: string;
-}
-
 export interface DuplicateGroup {
   normalizedName: string;
   displayName: string;

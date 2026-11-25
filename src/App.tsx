@@ -582,7 +582,6 @@ export default function App() {
                 }
                 preview={store.preview}
                 theme={store.theme}
-                appIntegrations={store.appIntegrations}
                 onUpdatePreview={store.updatePreview}
                 onUpdateOpenType={store.updateOpenType}
                 onToggleActivate={store.toggleFontActivation}
@@ -591,8 +590,6 @@ export default function App() {
                 onAddTag={store.addTagToFont}
                 onRemoveTag={store.removeTagFromFont}
                 onUpdateNotes={store.updateFontNotes}
-                onToggleAppAutoActivate={store.toggleAppAutoActivate}
-                onApplyToApp={store.applyFontToApp}
                 onNotify={store.showToast}
               />
             )}
@@ -661,8 +658,6 @@ export default function App() {
           <PreferencesModal
             theme={store.theme}
             onSetTheme={store.setTheme}
-            appIntegrations={store.appIntegrations}
-            onToggleApp={store.toggleAppAutoActivate}
             onResetLibrary={store.resetAllData}
             onClose={() => setActiveModal(null)}
           />

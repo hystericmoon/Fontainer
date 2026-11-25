@@ -322,7 +322,8 @@ export const FontRow: React.FC<FontRowProps> = ({
                   {style.name}
                 </div>
                 <div className="text-[10px] font-code tabular-nums text-neutral-400">
-                  {style.weight} · {style.fileSizeKb} KB
+                  {style.weight}
+                  {style.fileSizeKb > 0 ? ` · ${style.fileSizeKb} KB` : ''}
                 </div>
               </div>
 

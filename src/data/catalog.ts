@@ -1,5 +1,4 @@
 import type {
-  AppIntegration,
   FontFamily,
   FontLibrary,
   FontList,
@@ -40,44 +39,6 @@ export const INITIAL_SMART_LISTS: SmartList[] = [
     name: 'Monospace Faces',
     matchMode: 'all',
     rules: [{ id: 'r2', field: 'classification', operator: 'equals', value: 'Monospace' }],
-  },
-];
-
-export const INITIAL_APP_INTEGRATIONS: AppIntegration[] = [
-  {
-    id: 'figma',
-    name: 'Figma',
-    bundleId: 'com.figma.Desktop',
-    autoActivate: true,
-    detected: true,
-  },
-  {
-    id: 'photoshop',
-    name: 'Adobe Photoshop',
-    bundleId: 'com.adobe.Photoshop',
-    autoActivate: true,
-    detected: true,
-  },
-  {
-    id: 'illustrator',
-    name: 'Adobe Illustrator',
-    bundleId: 'com.adobe.illustrator',
-    autoActivate: true,
-    detected: true,
-  },
-  {
-    id: 'indesign',
-    name: 'Adobe InDesign',
-    bundleId: 'com.adobe.InDesign',
-    autoActivate: false,
-    detected: true,
-  },
-  {
-    id: 'sketch',
-    name: 'Sketch',
-    bundleId: 'com.bohemiancoding.sketch3',
-    autoActivate: false,
-    detected: true,
   },
 ];
 
