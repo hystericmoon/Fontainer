@@ -43,6 +43,7 @@ import { WaterfallView } from './components/WaterfallView';
 import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
 import {
+  cancelBatchActivationInOs,
   checkForDesktopUpdate,
   installDesktopUpdateInApp,
   subscribeDesktopEvents,
@@ -524,12 +525,24 @@ export default function App() {
                     {store.bulkProgress.currentName ? ` — ${store.bulkProgress.currentName}` : ''}
                   </span>
                 </span>
-                {store.bulkProgress.total > 0 && (
-                  <span className="font-code tabular-nums text-[11px] text-[var(--color-text-secondary)] shrink-0">
-                    {store.bulkProgress.completed.toLocaleString()} /{' '}
-                    {store.bulkProgress.total.toLocaleString()}
-                  </span>
-                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  {store.bulkProgress.total > 0 && (
+                    <span className="font-code tabular-nums text-[11px] text-[var(--color-text-secondary)]">
+                      {store.bulkProgress.completed.toLocaleString()} /{' '}
+                      {store.bulkProgress.total.toLocaleString()}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void cancelBatchActivationInOs();
+                      store.showToast('Cancelling batch activation…');
+                    }}
+                    className="h-6 px-2 rounded-md border border-[var(--color-border)] bg-white dark:bg-[#1b1b1b] text-[11px] font-medium text-[var(--color-text-primary)] hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
               {store.bulkProgress.total > 0 && (
                 <div className="h-1 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">

@@ -13,6 +13,7 @@ use tokio::sync::Semaphore;
 pub struct FontActivatorState {
     pub lock: Mutex<()>,
     pub session_only: AtomicBool,
+    pub cancel_batch: AtomicBool,
 }
 
 impl Default for FontActivatorState {
@@ -20,8 +21,15 @@ impl Default for FontActivatorState {
         Self {
             lock: Mutex::new(()),
             session_only: AtomicBool::new(false),
+            cancel_batch: AtomicBool::new(false),
         }
     }
+}
+
+/// Immediately cancels any running batch Google Fonts / Drive activation.
+#[tauri::command]
+pub fn cancel_batch_activation(state: tauri::State<'_, FontActivatorState>) {
+    state.cancel_batch.store(true, Ordering::Relaxed);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1550,6 +1558,7 @@ pub async fn batch_activate_google_fonts(
     let manifest_path = resolve_manifest_path(&app)?;
     fs::create_dir_all(&fonts_dir).map_err(|e| format!("Failed creating fonts dir: {e}"))?;
 
+    state.cancel_batch.store(false, Ordering::Relaxed);
     let session_only = state.session_only.load(Ordering::Relaxed);
     let already_active = {
         let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
@@ -1563,11 +1572,14 @@ pub async fn batch_activate_google_fonts(
         .build()
         .map_err(|e| format!("Failed initializing HTTP client: {e}"))?;
 
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(8));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
     let done_counter = Arc::new(AtomicUsize::new(0));
     let mut handles = Vec::with_capacity(total);
 
     for item in items {
+        if state.cancel_batch.load(Ordering::Relaxed) {
+            break;
+        }
         if already_active.contains(&item.font_id) {
             let done = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = app.emit(
@@ -1590,11 +1602,18 @@ pub async fn batch_activate_google_fonts(
 
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok()?;
+            if app_clone
+                .state::<FontActivatorState>()
+                .cancel_batch
+                .load(Ordering::Relaxed)
+            {
+                return None;
+            }
             let safe_id = sanitize_segment(&item.font_id);
             let font_cache_dir = resolve_font_cache_dir(&app_clone, &safe_id).ok()?;
 
             // 1. Check local disk cache first
-            let mut files_to_install: Vec<(String, Vec<u8>)> = Vec::new();
+            let mut cached_files: Vec<(String, PathBuf)> = Vec::new();
             if font_cache_dir.is_dir() {
                 if let Ok(entries) = fs::read_dir(&font_cache_dir) {
                     for entry in entries.flatten() {
@@ -1604,18 +1623,14 @@ pub async fn batch_activate_google_fonts(
                             && (name.to_ascii_lowercase().ends_with(".ttf")
                                 || name.to_ascii_lowercase().ends_with(".otf"))
                         {
-                            if let Ok(bytes) = fs::read(&path) {
-                                if !bytes.is_empty() {
-                                    files_to_install.push((name, bytes));
-                                }
-                            }
+                            cached_files.push((name, path));
                         }
                     }
                 }
             }
 
-            // 2. Otherwise fetch CSS2 -> .ttf files from fonts.gstatic.com
-            if files_to_install.is_empty() {
+            // 2. Otherwise fetch CSS2 -> .ttf files from fonts.gstatic.com into cache
+            if cached_files.is_empty() {
                 let css_url = build_google_css2_url(&item.family_name, &item.styles);
                 let css_resp = client.get(&css_url).send().await.ok()?;
                 if !css_resp.status().is_success() {
@@ -1628,6 +1643,13 @@ pub async fn batch_activate_google_fonts(
                 }
                 let _ = fs::create_dir_all(&font_cache_dir);
                 for (idx, face) in faces.into_iter().take(12).enumerate() {
+                    if app_clone
+                        .state::<FontActivatorState>()
+                        .cancel_batch
+                        .load(Ordering::Relaxed)
+                    {
+                        break;
+                    }
                     let resp = match client.get(&face.url).send().await {
                         Ok(r) if r.status().is_success() => r,
                         _ => continue,
@@ -1653,32 +1675,53 @@ pub async fn batch_activate_google_fonts(
                         idx,
                         ext
                     );
-                    let _ = fs::write(font_cache_dir.join(&fname), &bytes);
-                    files_to_install.push((fname, bytes));
+                    let cache_path = font_cache_dir.join(&fname);
+                    if fs::write(&cache_path, &bytes).is_ok() {
+                        cached_files.push((fname, cache_path));
+                    }
                 }
             }
 
-            if files_to_install.is_empty() {
+            if cached_files.is_empty() {
                 return None;
             }
 
-            // 3. Install & register with OS (no per-font broadcast!)
+            // 3. Register with OS:
+            // - macOS (RightFont technique): register IN-PLACE from Fontainer cache dir so ~/Library/Fonts
+            //   never gets flooded and macOS fontd never lags!
+            // - Windows: copy to %LOCALAPPDATA%\Microsoft\Windows\Fonts & register.
             let mut installed_files = Vec::new();
-            for (fname, bytes) in files_to_install {
-                let installed_name = format!("Fontainer_{safe_id}_{fname}");
-                let dest_path = fonts_dir_clone.join(&installed_name);
-                if fs::write(&dest_path, &bytes).is_err() {
-                    continue;
+            for (fname, cache_path) in cached_files {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = &fonts_dir_clone;
+                    let reg_name = platform_os::register_font(&cache_path, &item.family_name)
+                        .ok()
+                        .flatten();
+                    installed_files.push(InstalledFontFile {
+                        file_name: fname,
+                        installed_path: cache_path.to_string_lossy().to_string(),
+                        registry_name: reg_name,
+                        external_in_place: true,
+                    });
                 }
-                let reg_name = platform_os::register_font(&dest_path, &item.family_name)
-                    .ok()
-                    .flatten();
-                installed_files.push(InstalledFontFile {
-                    file_name: installed_name,
-                    installed_path: dest_path.to_string_lossy().to_string(),
-                    registry_name: reg_name,
-                    external_in_place: false,
-                });
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let installed_name = format!("Fontainer_{safe_id}_{fname}");
+                    let dest_path = fonts_dir_clone.join(&installed_name);
+                    if fs::copy(&cache_path, &dest_path).is_err() {
+                        continue;
+                    }
+                    let reg_name = platform_os::register_font(&dest_path, &item.family_name)
+                        .ok()
+                        .flatten();
+                    installed_files.push(InstalledFontFile {
+                        file_name: installed_name,
+                        installed_path: dest_path.to_string_lossy().to_string(),
+                        registry_name: reg_name,
+                        external_in_place: false,
+                    });
+                }
             }
 
             if installed_files.is_empty() {

@@ -26,7 +26,7 @@ import {
   Type,
   Wand2,
 } from 'lucide-react';
-import type { DesktopUpdateInfo } from '../services/desktopFontActivator';
+import { APP_VERSION, type DesktopUpdateInfo } from '../services/desktopFontActivator';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
 import { GoogleSignInButton } from './CloudConnectionsModal';
 import { TOTAL_ICON_COUNT } from './IconLibraryView';
@@ -203,6 +203,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <span className="text-[14px] font-semibold tracking-tight text-[var(--color-text-primary)] whitespace-nowrap">
             Fontainer
+          </span>
+          <span className="text-[10px] font-code text-[var(--color-text-secondary)]">
+            v{APP_VERSION}
           </span>
         </div>
         <span className="text-[11px] font-code tabular-nums text-[var(--color-text-secondary)]">

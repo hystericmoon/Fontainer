@@ -152,30 +152,36 @@ jobs:
           name: Fontainer-Windows-x64-EXE
           path: release-assets
 
-      - name: Generate Tauri v2 latest.json updater manifest
+      - name: Version release filenames & generate Tauri v2 latest.json updater manifest
         run: |
           export TAG="${GITHUB_REF_NAME}"
           export VERSION="${TAG#v}"
           export PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           export BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          export MAC_SIG="$(cat release-assets/Fontainer-macOS-Universal.app.tar.gz.sig 2>/dev/null || echo '')"
-          export WIN_SIG="$(cat release-assets/Fontainer-Windows-x64-Setup.exe.sig 2>/dev/null || echo '')"
+          mv release-assets/Fontainer-macOS-Universal.dmg "release-assets/Fontainer-${TAG}-macOS-Universal.dmg"
+          mv release-assets/Fontainer-macOS-Universal.app.tar.gz "release-assets/Fontainer-${TAG}-macOS-Universal.app.tar.gz"
+          mv release-assets/Fontainer-macOS-Universal.app.tar.gz.sig "release-assets/Fontainer-${TAG}-macOS-Universal.app.tar.gz.sig"
+          mv release-assets/Fontainer-Windows-x64-Setup.exe "release-assets/Fontainer-${TAG}-Windows-x64-Setup.exe"
+          mv release-assets/Fontainer-Windows-x64-Setup.exe.sig "release-assets/Fontainer-${TAG}-Windows-x64-Setup.exe.sig"
+          export MAC_SIG="$(cat "release-assets/Fontainer-${TAG}-macOS-Universal.app.tar.gz.sig" 2>/dev/null || echo '')"
+          export WIN_SIG="$(cat "release-assets/Fontainer-${TAG}-Windows-x64-Setup.exe.sig" 2>/dev/null || echo '')"
           node -e '
             const fs = require("fs");
             const platforms = {};
+            const tag = process.env.TAG;
             const macSig = (process.env.MAC_SIG || "").trim();
             const winSig = (process.env.WIN_SIG || "").trim();
             const base = process.env.BASE_URL;
             if (macSig) {
-              platforms["darwin-aarch64"] = { signature: macSig, url: `${base}/Fontainer-macOS-Universal.app.tar.gz` };
-              platforms["darwin-x86_64"] = { signature: macSig, url: `${base}/Fontainer-macOS-Universal.app.tar.gz` };
+              platforms["darwin-aarch64"] = { signature: macSig, url: `${base}/Fontainer-${tag}-macOS-Universal.app.tar.gz` };
+              platforms["darwin-x86_64"] = { signature: macSig, url: `${base}/Fontainer-${tag}-macOS-Universal.app.tar.gz` };
             }
             if (winSig) {
-              platforms["windows-x86_64"] = { signature: winSig, url: `${base}/Fontainer-Windows-x64-Setup.exe` };
+              platforms["windows-x86_64"] = { signature: winSig, url: `${base}/Fontainer-${tag}-Windows-x64-Setup.exe` };
             }
             const manifest = {
               version: process.env.VERSION,
-              notes: `Fontainer ${process.env.TAG} — automatic desktop update.`,
+              notes: `Fontainer ${tag} — automatic desktop update.`,
               pub_date: process.env.PUB_DATE,
               platforms,
             };
@@ -183,14 +189,15 @@ jobs:
             console.log(JSON.stringify(manifest, null, 2));
           '
 
-      - name: Publish GitHub Release with .dmg, .exe, and updater manifest
+      - name: Publish GitHub Release with versioned .dmg, .exe, and updater manifest
         uses: softprops/action-gh-release@v2
         with:
+          name: "Fontainer ${{ github.ref_name }}"
           files: |
-            release-assets/Fontainer-macOS-Universal.dmg
-            release-assets/Fontainer-macOS-Universal.app.tar.gz
-            release-assets/Fontainer-macOS-Universal.app.tar.gz.sig
-            release-assets/Fontainer-Windows-x64-Setup.exe
-            release-assets/Fontainer-Windows-x64-Setup.exe.sig
+            release-assets/Fontainer-*-macOS-Universal.dmg
+            release-assets/Fontainer-*-macOS-Universal.app.tar.gz
+            release-assets/Fontainer-*-macOS-Universal.app.tar.gz.sig
+            release-assets/Fontainer-*-Windows-x64-Setup.exe
+            release-assets/Fontainer-*-Windows-x64-Setup.exe.sig
             release-assets/latest.json
           generate_release_notes: true

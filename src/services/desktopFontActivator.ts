@@ -2,10 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.3.1';
 export const GITHUB_REPO = 'hystericmoon/Fontainer';
-export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
-export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
+export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-v${APP_VERSION}-macOS-Universal.dmg`;
+export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-v${APP_VERSION}-Windows-x64-Setup.exe`;
 export const RELEASES_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
 export interface OsFontStatus {
@@ -391,6 +391,15 @@ export async function batchActivateGoogleFonts(
   return invoke<BatchActivationSummary>('batch_activate_google_fonts', {
     items,
   });
+}
+
+export async function cancelBatchActivationInOs(): Promise<void> {
+  if (!isTauriDesktop()) return;
+  try {
+    await invoke('cancel_batch_activation');
+  } catch {
+    // ignore
+  }
 }
 
 export async function batchDeactivateOsFonts(fontIds: string[]): Promise<number> {
