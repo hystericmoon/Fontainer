@@ -14,16 +14,15 @@ interface InstallMacModalProps {
   onNotify: (msg: string) => void;
 }
 
-const TAURI_DMG_SNIPPET = `npm install --legacy-peer-deps && npm install -D @tauri-apps/cli@^2 --legacy-peer-deps
-npx tauri init --ci --app-name Fontainer \\
-  --window-title Fontainer --frontend-dist ../dist \\
-  --dev-url http://localhost:3000 \\
-  --before-dev-command "npm run dev" \\
-  --before-build-command "npm run build"
-sed -i '' 's/"com.tauri.dev"/"com.fontainer.app"/' src-tauri/tauri.conf.json
-npx tauri icon public/pwa-512x512.png
+const TAURI_DESKTOP_SNIPPET = `# macOS Universal (.dmg)
+npm install --legacy-peer-deps
 VITE_API_BASE_URL="https://fontainer-alpha.vercel.app" \\
-  npx tauri build --bundles dmg`;
+  npm run tauri:build -- --bundles dmg
+
+# Windows x64 (.exe installer)
+npm install --legacy-peer-deps
+$env:VITE_API_BASE_URL="https://fontainer-alpha.vercel.app"
+npm run tauri:build -- --bundles nsis`;
 
 export const InstallMacModal: React.FC<InstallMacModalProps> = ({
   isOpen,
@@ -39,9 +38,9 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(TAURI_DMG_SNIPPET);
+      await navigator.clipboard.writeText(TAURI_DESKTOP_SNIPPET);
       setCopiedCmd(true);
-      onNotify('Copied Tauri v2 .dmg build commands');
+      onNotify('Copied Tauri v2 desktop build commands');
       window.setTimeout(() => setCopiedCmd(false), 1800);
     } catch {
       onNotify('Commands ready to copy');
@@ -59,8 +58,8 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
       padding={4}
     >
       <DialogHeader
-        title="Install Fontainer on macOS"
-        subtitle="Add directly to your macOS Dock now, or package a standalone .dmg installer."
+        title="Install Fontainer Desktop"
+        subtitle="Use the native Mac (.dmg) or Windows (.exe) app for real OS font activation, or install as a web app."
         onOpenChange={(open) => {
           if (!open) onClose();
         }}
@@ -134,18 +133,20 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
           )}
         </section>
 
-        {/* Option 2: Native macOS .dmg via GitHub Actions or Tauri v2 */}
+        {/* Option 2: Native macOS .dmg & Windows .exe via GitHub Actions or Tauri v2 */}
         <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] space-y-2.5">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5 min-w-0 flex-1">
               <Terminal className="w-4 h-4 mt-0.5 shrink-0 text-[var(--color-text-secondary)]" />
               <div className="min-w-0">
                 <h3 className="font-semibold text-[13px] text-[var(--color-text-primary)]">
-                  2. Native macOS .dmg (GitHub Actions or Local Mac)
+                  2. Native Desktop App — macOS .dmg &amp; Windows .exe (Real OS Font Activation)
                 </h3>
                 <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
-                  Push to GitHub and run the included <strong>Build macOS .dmg</strong> Action for a
-                  universal Apple Silicon + Intel <code>.dmg</code>, or build locally with Tauri v2:
+                  Installs activated Google Fonts &amp; Google Drive fonts directly into{' '}
+                  <code>~/Library/Fonts</code> (Mac) and{' '}
+                  <code>%LOCALAPPDATA%\Microsoft\Windows\Fonts</code> (Windows) in real time via
+                  Firebase sync. Download installers from GitHub Actions / Releases or build locally:
                 </p>
               </div>
             </div>
@@ -159,8 +160,8 @@ export const InstallMacModal: React.FC<InstallMacModalProps> = ({
               />
             </div>
           </div>
-          <pre className="p-3 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[11px] font-code text-[var(--color-text-primary)] max-h-36 overflow-auto whitespace-pre leading-relaxed select-text">
-            {TAURI_DMG_SNIPPET}
+          <pre className="p-3 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[11px] font-code text-[var(--color-text-primary)] max-h-40 overflow-auto whitespace-pre leading-relaxed select-text">
+            {TAURI_DESKTOP_SNIPPET}
           </pre>
         </section>
 

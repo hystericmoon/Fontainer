@@ -57,6 +57,11 @@ interface SidebarProps {
   onDropFontOnList: (listId: string, fontId: string) => void;
   showInstallAction?: boolean;
   onOpenInstall?: () => void;
+  isDesktop?: boolean;
+  osPlatform?: string | null;
+  osActiveCount?: number;
+  osSyncBusy?: boolean;
+  onOpenOsFontsFolder?: () => void;
   user: User | null;
   cloudSynced: boolean;
   onSignInGoogle: () => void;
@@ -90,6 +95,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDropFontOnList,
   showInstallAction = false,
   onOpenInstall,
+  isDesktop = false,
+  osPlatform = null,
+  osActiveCount = 0,
+  osSyncBusy = false,
+  onOpenOsFontsFolder,
   user,
   cloudSynced,
   onSignInGoogle,
@@ -477,6 +487,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {compareCount} pinned
           </span>
         </button>
+        {isDesktop && onOpenOsFontsFolder && (
+          <button
+            type="button"
+            onClick={onOpenOsFontsFolder}
+            title={
+              osPlatform === 'windows'
+                ? 'Open %LOCALAPPDATA%\\Microsoft\\Windows\\Fonts'
+                : 'Open ~/Library/Fonts'
+            }
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] text-neutral-600 dark:text-neutral-300 hover:bg-black/[0.05] dark:hover:bg-white/[0.07] hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <HardDrive className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="truncate">
+                {osPlatform === 'windows' ? 'Windows Fonts' : 'macOS Fonts'}
+              </span>
+            </span>
+            <span className="font-code tabular-nums text-[10.5px] text-emerald-700 dark:text-emerald-400 shrink-0">
+              {osSyncBusy ? 'Syncing…' : `${osActiveCount} live`}
+            </span>
+          </button>
+        )}
         {showInstallAction && onOpenInstall && (
           <button
             type="button"
@@ -485,10 +517,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <span className="flex items-center gap-2">
               <Download className="w-3.5 h-3.5 text-neutral-500" />
-              <span>Install on Mac</span>
+              <span>Desktop App</span>
             </span>
             <span className="text-[10px] font-code text-neutral-500 dark:text-neutral-400">
-              Dock / DMG
+              Mac / Win
             </span>
           </button>
         )}

@@ -10,9 +10,20 @@ import {
   downloadGoogleDriveFont,
   DriveAuthExpiredError,
   fetchAdobeFontsKit,
+  fetchGoogleDriveFileMetadata,
   fetchLiveGoogleFonts,
   type RemoteFontFile,
 } from '../services/cloudProviders';
+import {
+  activateCachedFontInOs,
+  activateFontBinaryInOs,
+  activateGoogleFontInOs,
+  deactivateOsFont,
+  extractDriveFileId,
+  getOsFontStatus,
+  isTauriDesktop,
+  openOsFontsFolder,
+} from '../services/desktopFontActivator';
 import {
   clearGoogleDriveAccessToken,
   getGoogleDriveAccessToken,
@@ -59,6 +70,7 @@ import {
 } from '../utils/fontFilter';
 import {
   deleteStoredFontBuffer,
+  getStoredFontBuffer,
   importLocalFontFile,
   restoreUploadedFonts,
   scanLocalDirectoryFonts,
@@ -142,6 +154,16 @@ export function useFontainerStore() {
   const [hasDriveToken, setHasDriveToken] = useState(false);
   const [cloudSynced, setCloudSynced] = useState(false);
 
+  // Desktop OS Font Activator State (Tauri v2 macOS & Windows — cleanly idle on Vercel Web)
+  const isDesktop = useMemo(() => isTauriDesktop(), []);
+  const [osReady, setOsReady] = useState(false);
+  const [osPlatform, setOsPlatform] = useState<string | null>(null);
+  const [osFontsDir, setOsFontsDir] = useState<string | null>(null);
+  const [osActiveCount, setOsActiveCount] = useState(0);
+  const [osSyncBusy, setOsSyncBusy] = useState(false);
+  const [pendingDriveSyncIds, setPendingDriveSyncIds] = useState<string[]>([]);
+  const [osSyncNonce, setOsSyncNonce] = useState(0);
+
   // Live Font Sources (Zero fake data)
   const [googleFonts, setGoogleFonts] = useState<FontFamily[]>([]);
   const [googleLoading, setGoogleLoading] = useState(true);
@@ -175,6 +197,14 @@ export function useFontainerStore() {
   userRef.current = user;
   const fontMetaRef = useRef<Record<string, CloudFontMeta>>(fontMeta);
   fontMetaRef.current = fontMeta;
+  const googleFontsRef = useRef<FontFamily[]>(googleFonts);
+  googleFontsRef.current = googleFonts;
+  const customFontsRef = useRef<FontFamily[]>(customFonts);
+  customFontsRef.current = customFonts;
+  const osActiveIdsRef = useRef<Set<string>>(new Set());
+  const osSkippedIdsRef = useRef<Set<string>>(new Set());
+  const osReconcileRunningRef = useRef(false);
+  const osReconcileDirtyRef = useRef(false);
 
   // Debounced Firestore write buffers (prevents per-keystroke / per-slider-tick write floods)
   const workspacePatchTimerRef = useRef<number | null>(null);
@@ -704,9 +734,23 @@ export function useFontainerStore() {
       setCompareIds((prev) => prev.filter((id) => id !== fontId));
       setCheckedFontIds((prev) => prev.filter((id) => id !== fontId));
       void deleteStoredFontBuffer(fontId);
+      if (isDesktop) {
+        void deactivateOsFont(fontId)
+          .then(() => {
+            osActiveIdsRef.current.delete(fontId);
+            setOsActiveCount(osActiveIdsRef.current.size);
+          })
+          .catch(() => {});
+      }
+      const existingMeta = fontMetaRef.current[fontId];
+      if (existingMeta?.activated) {
+        const deactivatedMeta: CloudFontMeta = { ...existingMeta, activated: false };
+        setFontMeta((prev) => ({ ...prev, [fontId]: deactivatedMeta }));
+        if (user) void saveFontMetaDoc(user.uid, deactivatedMeta);
+      }
       showToast('Removed font family');
     },
-    [showToast, user],
+    [isDesktop, showToast, user],
   );
 
   // Font Lists
@@ -930,14 +974,39 @@ export function useFontainerStore() {
       }
 
       if (imported.length > 0) {
-        setCustomFonts((prev) => [...imported, ...prev]);
+        const importedIdSet = new Set(imported.map((f) => f.id));
+        setCustomFonts((prev) => [
+          ...imported,
+          ...prev.filter((f) => !importedIdSet.has(f.id)),
+        ]);
+        const currentMeta = fontMetaRef.current;
+        const metaBatch: CloudFontMeta[] = imported.map((family) => {
+          const existing = currentMeta[family.id];
+          return {
+            fontId: family.id,
+            starred: existing?.starred ?? false,
+            activated: true,
+            tags: existing?.tags?.length ? existing.tags : family.tags,
+            notes: existing?.notes || family.notes,
+          };
+        });
+        setFontMeta((prev) => {
+          const next = { ...prev };
+          for (const item of metaBatch) {
+            next[item.fontId] = item;
+          }
+          return next;
+        });
+        if (user) {
+          void saveFontMetaBatch(user.uid, metaBatch);
+        }
         setSelectedFontId(imported[0].id);
         navigate({ type: 'library', id: libId });
         showToast(`Loaded ${imported.length} real font ${imported.length === 1 ? 'file' : 'files'} from Google Drive`);
       }
       return imported.length;
     },
-    [ensureLibraryExists, invalidateDriveToken, navigate, showToast],
+    [ensureLibraryExists, invalidateDriveToken, navigate, showToast, user],
   );
 
   // REAL Local Mac / OS System Fonts Scan (queryLocalFonts)
@@ -1137,6 +1206,289 @@ export function useFontainerStore() {
     showToast('Cleared local workspace cache');
   }, [showToast]);
 
+  const handleOpenOsFontsFolder = useCallback(async () => {
+    if (!isDesktop) return;
+    try {
+      await openOsFontsFolder();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to open OS Fonts folder');
+    }
+  }, [isDesktop, showToast]);
+
+  const triggerOsFontResync = useCallback(() => {
+    osSkippedIdsRef.current.clear();
+    setOsSyncNonce((n) => n + 1);
+  }, []);
+
+  // Load current OS font activator status on desktop startup
+  useEffect(() => {
+    if (!isDesktop) return;
+    let mounted = true;
+    void getOsFontStatus()
+      .then((status) => {
+        if (!mounted || !status) return;
+        setOsPlatform(status.platform);
+        setOsFontsDir(status.fontsDir);
+        osActiveIdsRef.current = new Set(status.activeFontIds);
+        setOsActiveCount(status.activeFontIds.length);
+        setOsReady(true);
+      })
+      .catch(() => {
+        if (mounted) setOsReady(true);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [isDesktop]);
+
+  // Clear skipped Drive failures whenever a fresh Google Drive token becomes available
+  useEffect(() => {
+    if (hasDriveToken) {
+      osSkippedIdsRef.current.clear();
+      setOsSyncNonce((n) => n + 1);
+    }
+  }, [hasDriveToken]);
+
+  // Real-time Firebase <-> OS Font Activator reconciliation loop (Desktop only; no-op on Vercel Web)
+  useEffect(() => {
+    if (!isDesktop || !osReady) return;
+    // Wait for initial Firestore snapshot when signed in so startup never deactivates synced fonts
+    if (user && !cloudSynced) return;
+
+    const runReconcile = async () => {
+      if (osReconcileRunningRef.current) {
+        osReconcileDirtyRef.current = true;
+        return;
+      }
+      osReconcileRunningRef.current = true;
+      setOsSyncBusy(true);
+
+      let totalActivated = 0;
+      let totalDeactivated = 0;
+
+      try {
+        do {
+          osReconcileDirtyRef.current = false;
+
+          const currentMeta = fontMetaRef.current;
+          const currentGoogle = googleFontsRef.current;
+          const currentCustom = customFontsRef.current;
+
+          const desiredActiveIds = new Set<string>();
+          for (const [fid, meta] of Object.entries(currentMeta)) {
+            if (meta.activated) desiredActiveIds.add(fid);
+          }
+          for (const f of currentCustom) {
+            if (f.id.startsWith('sys-')) continue;
+            if (f.activated && currentMeta[f.id]?.activated !== false) {
+              desiredActiveIds.add(f.id);
+            }
+          }
+
+          // 1. Deactivate fonts no longer active in Firebase / local state
+          for (const activeId of Array.from(osActiveIdsRef.current)) {
+            if (!desiredActiveIds.has(activeId)) {
+              try {
+                await deactivateOsFont(activeId);
+                osActiveIdsRef.current.delete(activeId);
+                totalDeactivated += 1;
+              } catch {
+                // Keep in active set so next sync can retry cleanly
+              }
+            }
+          }
+
+          // 2. Activate newly active Google Fonts, Google Drive fonts, and local .ttf/.otf fonts
+          const waitingDrive: string[] = [];
+
+          for (const targetId of desiredActiveIds) {
+            if (osActiveIdsRef.current.has(targetId) || osSkippedIdsRef.current.has(targetId)) {
+              continue;
+            }
+            if (targetId.startsWith('sys-') || targetId.startsWith('adobe-')) {
+              continue;
+            }
+
+            // A) Google Fonts -> Rust downloads real desktop .ttf files & registers with OS
+            if (targetId.startsWith('gf-')) {
+              const gFont = currentGoogle.find((f) => f.id === targetId);
+              if (!gFont) continue; // Catalog still loading; effect will re-run once loaded
+              try {
+                const res = await activateGoogleFontInOs(
+                  gFont.id,
+                  gFont.name,
+                  gFont.styles.map((s) => ({ weight: s.weight, italic: s.italic })),
+                );
+                if (res?.installed) {
+                  osActiveIdsRef.current.add(targetId);
+                  if (!res.alreadyActive) totalActivated += 1;
+                }
+              } catch {
+                osSkippedIdsRef.current.add(targetId);
+              }
+              continue;
+            }
+
+            // B) Google Drive Fonts -> use local cache / IndexedDB, or auto-download from Drive
+            const driveFileId = extractDriveFileId(targetId);
+            if (driveFileId) {
+              const localEntry = currentCustom.find((f) => f.id === targetId);
+              const displayName = localEntry?.name || targetId;
+
+              try {
+                const cachedRes = await activateCachedFontInOs(targetId, displayName);
+                if (cachedRes?.installed) {
+                  osActiveIdsRef.current.add(targetId);
+                  if (!cachedRes.alreadyActive) totalActivated += 1;
+                  continue;
+                }
+              } catch {
+                // Fall through to IndexedDB / Drive download
+              }
+
+              const stored = await getStoredFontBuffer(targetId);
+              if (stored) {
+                try {
+                  const binRes = await activateFontBinaryInOs(
+                    targetId,
+                    stored.familyName,
+                    stored.fileName,
+                    stored.buffer,
+                  );
+                  if (binRes?.installed) {
+                    osActiveIdsRef.current.add(targetId);
+                    if (!binRes.alreadyActive) totalActivated += 1;
+                  }
+                } catch {
+                  // Likely web-only .woff/.woff2 format; skip OS install without error spam
+                  osSkippedIdsRef.current.add(targetId);
+                }
+                continue;
+              }
+
+              const driveToken = getGoogleDriveAccessToken();
+              if (!driveToken) {
+                waitingDrive.push(targetId);
+                continue;
+              }
+
+              try {
+                const remoteFile = await fetchGoogleDriveFileMetadata(driveToken, driveFileId);
+                ensureLibraryExists({
+                  id: 'lib-gdrive',
+                  name: 'Google Drive',
+                  provider: 'gdrive',
+                  path: 'drive.google.com',
+                  syncedAt: new Date().toISOString(),
+                  autoSync: true,
+                });
+                const downloadedFamily = await downloadGoogleDriveFont(
+                  driveToken,
+                  remoteFile,
+                  'lib-gdrive',
+                );
+                setCustomFonts((prev) => [
+                  downloadedFamily,
+                  ...prev.filter((f) => f.id !== downloadedFamily.id),
+                ]);
+
+                const freshBlob = await getStoredFontBuffer(downloadedFamily.id);
+                if (freshBlob) {
+                  const binRes = await activateFontBinaryInOs(
+                    downloadedFamily.id,
+                    downloadedFamily.name,
+                    freshBlob.fileName,
+                    freshBlob.buffer,
+                  );
+                  if (binRes?.installed) {
+                    osActiveIdsRef.current.add(targetId);
+                    totalActivated += 1;
+                  }
+                }
+              } catch (err) {
+                if (err instanceof DriveAuthExpiredError) {
+                  invalidateDriveToken();
+                  waitingDrive.push(targetId);
+                } else {
+                  osSkippedIdsRef.current.add(targetId);
+                }
+              }
+              continue;
+            }
+
+            // C) Local Imported Custom Font (.ttf/.otf)
+            const localEntry = currentCustom.find((f) => f.id === targetId);
+            if (localEntry?.isCustomUpload) {
+              try {
+                const cachedRes = await activateCachedFontInOs(targetId, localEntry.name);
+                if (cachedRes?.installed) {
+                  osActiveIdsRef.current.add(targetId);
+                  if (!cachedRes.alreadyActive) totalActivated += 1;
+                  continue;
+                }
+              } catch {
+                // Fall through to IndexedDB
+              }
+
+              const stored = await getStoredFontBuffer(targetId);
+              if (stored) {
+                try {
+                  const binRes = await activateFontBinaryInOs(
+                    targetId,
+                    stored.familyName,
+                    stored.fileName,
+                    stored.buffer,
+                  );
+                  if (binRes?.installed) {
+                    osActiveIdsRef.current.add(targetId);
+                    if (!binRes.alreadyActive) totalActivated += 1;
+                  }
+                } catch {
+                  osSkippedIdsRef.current.add(targetId);
+                }
+              }
+            }
+          }
+
+          setOsActiveCount(osActiveIdsRef.current.size);
+          setPendingDriveSyncIds(waitingDrive);
+        } while (osReconcileDirtyRef.current);
+
+        const osLabel = osPlatform === 'windows' ? 'Windows Fonts' : 'macOS Fonts';
+        if (totalActivated > 0 && totalDeactivated > 0) {
+          showToast(`Synced ${totalActivated} activated & ${totalDeactivated} deactivated in ${osLabel}`);
+        } else if (totalActivated > 0) {
+          showToast(
+            `Installed ${totalActivated} ${totalActivated === 1 ? 'font' : 'fonts'} into ${osLabel}`,
+          );
+        } else if (totalDeactivated > 0) {
+          showToast(
+            `Removed ${totalDeactivated} ${totalDeactivated === 1 ? 'font' : 'fonts'} from ${osLabel}`,
+          );
+        }
+      } finally {
+        osReconcileRunningRef.current = false;
+        setOsSyncBusy(false);
+      }
+    };
+
+    void runReconcile();
+  }, [
+    isDesktop,
+    osReady,
+    user,
+    cloudSynced,
+    fontMeta,
+    googleFonts,
+    customFonts,
+    hasDriveToken,
+    osSyncNonce,
+    osPlatform,
+    ensureLibraryExists,
+    invalidateDriveToken,
+    showToast,
+  ]);
+
   return {
     // Auth & Sync
     user,
@@ -1146,6 +1498,15 @@ export function useFontainerStore() {
     signInWithGoogle: handleSignInGoogle,
     signOut: handleSignOut,
     invalidateDriveToken,
+    // Desktop OS Font Activator
+    isDesktop,
+    osPlatform,
+    osFontsDir,
+    osActiveCount,
+    osSyncBusy,
+    pendingDriveSyncIds,
+    openOsFontsFolder: handleOpenOsFontsFolder,
+    triggerOsFontResync,
     // Live Sources
     googleLoading,
     googleError,

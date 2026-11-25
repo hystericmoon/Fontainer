@@ -9,7 +9,7 @@ const FONT_FILE_RE = /\.(ttf|otf|woff2?)$/i;
 const loadedGoogleFamilies = new Set<string>();
 const loadedAdobeKits = new Set<string>();
 
-interface StoredFontBlob {
+export interface StoredFontBlob {
   id: string;
   familyName: string;
   buffer: ArrayBuffer;
@@ -45,6 +45,20 @@ async function saveFontBuffer(record: StoredFontBlob): Promise<void> {
     });
   } catch {
     // Non-fatal in private browsing or restricted contexts
+  }
+}
+
+export async function getStoredFontBuffer(id: string): Promise<StoredFontBlob | null> {
+  try {
+    const db = await openFontDb();
+    return await new Promise<StoredFontBlob | null>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).get(id);
+      req.onsuccess = () => resolve((req.result as StoredFontBlob | undefined) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -172,13 +186,15 @@ export async function parseAndLoadFontBuffer(
   fileName: string,
   targetLibraryId: string,
   options?: {
+    id?: string;
+    driveFileId?: string;
     sourceLabel?: string;
     sourcePath?: string;
     extraTags?: string[];
   },
 ): Promise<FontFamily> {
   const format = inferFormat(fileName);
-  const id = `font-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const id = options?.id || `font-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   let familyName = cleanFontName(fileName);
   let styleName = /italic/i.test(fileName) ? 'Italic' : 'Regular';
@@ -290,6 +306,8 @@ export async function parseAndLoadFontBuffer(
     tags: Array.from(new Set([format.toLowerCase(), ...(options?.extraTags ?? [])])),
     notes: options?.sourcePath ? `Loaded from ${options.sourcePath}` : `Imported from ${fileName}`,
     isCustomUpload: true,
+    driveFileId: options?.driveFileId,
+    driveFileName: options?.driveFileId ? fileName : undefined,
     sourcePath: options?.sourcePath || fileName,
     customGlyphs,
     styles: [

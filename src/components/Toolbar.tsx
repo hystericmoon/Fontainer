@@ -267,8 +267,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <button
               type="button"
               onClick={onOpenInstall}
-              aria-label="Install on Mac"
-              title="Install Fontainer on macOS"
+              aria-label="Install Desktop App"
+              title="Install Fontainer Desktop (macOS .dmg / Windows .exe)"
               className={iconBtn(false)}
             >
               <Download className="w-4 h-4" />

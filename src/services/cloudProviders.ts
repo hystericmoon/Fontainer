@@ -1,6 +1,7 @@
 import type { FontClassification, FontFamily, FontStyleVariant } from '../types/font';
 import { ensureAdobeKitStylesheet, parseAndLoadFontBuffer } from '../utils/fontLoader';
 import { resolveApiUrl } from '../utils/apiUrl';
+import { makeDriveFontId } from './desktopFontActivator';
 
 export interface IntegrationStatusResponse {
   googleFonts: { available: boolean; hasApiKey: boolean };
@@ -288,6 +289,33 @@ export async function listGoogleDriveFonts(accessToken: string): Promise<RemoteF
     }));
 }
 
+export async function fetchGoogleDriveFileMetadata(
+  accessToken: string,
+  fileId: string,
+): Promise<RemoteFontFile> {
+  const fields = encodeURIComponent('id,name,size,modifiedTime,mimeType');
+  const resp = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${fields}`,
+    {
+      signal: AbortSignal.timeout(15000),
+      headers: { Authorization: `Bearer ${accessToken}` },
+    },
+  );
+  if (resp.status === 401 || resp.status === 403) {
+    throw new DriveAuthExpiredError();
+  }
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch Drive font metadata (HTTP ${resp.status})`);
+  }
+  const f = (await resp.json()) as { id: string; name: string; size?: string; modifiedTime?: string };
+  return {
+    id: f.id,
+    name: f.name,
+    size: Number(f.size) || 0,
+    modifiedTime: f.modifiedTime,
+  };
+}
+
 export async function downloadGoogleDriveFont(
   accessToken: string,
   file: RemoteFontFile,
@@ -308,6 +336,8 @@ export async function downloadGoogleDriveFont(
   }
   const buf = await resp.arrayBuffer();
   return parseAndLoadFontBuffer(buf, file.name, libraryId, {
+    id: makeDriveFontId(file.id),
+    driveFileId: file.id,
     sourceLabel: 'Google Drive',
     sourcePath: `Google Drive/${file.name}`,
     extraTags: ['google-drive'],

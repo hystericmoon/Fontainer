@@ -4,6 +4,7 @@ import {
   getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
+  signInWithCredential,
   signInWithPopup,
   signInWithRedirect,
   signOut,
@@ -11,6 +12,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { isTauriDesktop, startDesktopAuthSession } from './desktopFontActivator';
 
 export const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -137,6 +139,26 @@ export interface GoogleSignInResult {
 export async function signInWithGoogle(
   requestDriveConsent = false,
 ): Promise<GoogleSignInResult> {
+  // In the Tauri desktop app (macOS/Windows), complete Google OAuth in the user's real system
+  // browser via a one-shot localhost callback, then hydrate Firebase Auth with signInWithCredential.
+  if (isTauriDesktop()) {
+    try {
+      isSigningIn = true;
+      const tokens = await startDesktopAuthSession(requestDriveConsent);
+      const cred = GoogleAuthProvider.credential(
+        tokens.idToken,
+        tokens.accessToken ?? undefined,
+      );
+      const result = await signInWithCredential(auth, cred);
+      if (tokens.accessToken) {
+        cachedDriveAccessToken = tokens.accessToken;
+      }
+      return { user: result.user, accessToken: cachedDriveAccessToken };
+    } finally {
+      isSigningIn = false;
+    }
+  }
+
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
   if (requestDriveConsent) {

@@ -274,8 +274,13 @@ export default function App() {
             onDeleteSmartList={store.deleteSmartList}
             onSyncLibrary={store.syncLibrary}
             onDropFontOnList={(listId, fontId) => store.addFontsToList(listId, [fontId])}
-            showInstallAction={!pwa.isInstalled}
+            showInstallAction={!pwa.isInstalled && !store.isDesktop}
             onOpenInstall={() => setActiveModal('install-mac')}
+            isDesktop={store.isDesktop}
+            osPlatform={store.osPlatform}
+            osActiveCount={store.osActiveCount}
+            osSyncBusy={store.osSyncBusy}
+            onOpenOsFontsFolder={() => void store.openOsFontsFolder()}
             user={store.user}
             cloudSynced={store.cloudSynced}
             onSignInGoogle={() => void store.signInWithGoogle(false)}
@@ -293,6 +298,29 @@ export default function App() {
             >
               <WifiOff className="w-3.5 h-3.5 shrink-0" />
               <span>Offline mode — local font library and cached specimens remain available.</span>
+            </div>
+          )}
+
+          {/* Desktop Pending Google Drive Auto-Activation Banner */}
+          {store.isDesktop && store.pendingDriveSyncIds.length > 0 && (
+            <div
+              role="status"
+              className="shrink-0 px-4 py-1.5 bg-[#F1F1F1] dark:bg-[#242424] border-b border-[var(--color-border)] text-[var(--color-text-primary)] text-[12px] flex items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Cloud className="w-3.5 h-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+                <span className="truncate">
+                  {store.pendingDriveSyncIds.length} synced Google Drive{' '}
+                  {store.pendingDriveSyncIds.length === 1 ? 'font is' : 'fonts are'} ready to
+                  auto-activate on this computer.
+                </span>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                label="Connect Drive to Sync"
+                onClick={() => void store.signInWithGoogle(true)}
+              />
             </div>
           )}
 
@@ -322,7 +350,7 @@ export default function App() {
             onOpenConnections={() => setActiveModal('connections')}
             onOpenQuickSwitcher={() => setActiveModal('quick-switcher')}
             onOpenPreferences={() => setActiveModal('preferences')}
-            showInstallButton={!pwa.isInstalled}
+            showInstallButton={!pwa.isInstalled && !store.isDesktop}
             onOpenInstall={() => setActiveModal('install-mac')}
             searchInputRef={searchInputRef}
           />

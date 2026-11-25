@@ -73,6 +73,8 @@ export interface FontFamily {
   isCustomUpload?: boolean;
   googleFontUrl?: string;
   adobeKitId?: string;
+  driveFileId?: string;
+  driveFileName?: string;
   sourcePath?: string;
   customGlyphs?: string[];
   styles: FontStyleVariant[];
