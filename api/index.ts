@@ -795,28 +795,15 @@ export function createApiApp(options: CreateApiAppOptions = {}): Express {
     next();
   });
 
-  // Allow standalone Tauri macOS .dmg WebView origins + optional ALLOWED_ORIGINS env list to call /api/*
-  const allowedOrigins = new Set<string>([
-    'tauri://localhost',
-    'http://tauri.localhost',
-    'https://tauri.localhost',
-  ]);
-  for (const raw of (process.env.ALLOWED_ORIGINS || '').split(',')) {
-    const trimmed = raw.trim().replace(/\/+$/, '');
-    if (trimmed) allowedOrigins.add(trimmed);
-  }
-
+  // Always send CORS headers on /api/* (unconditionally, even on same-origin requests)
+  // so Vercel Edge CDN never caches a CORS-less response that breaks Tauri Mac/Windows apps.
   app.use('/api', (req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.has(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-      if (req.method === 'OPTIONS') {
-        res.status(204).end();
-        return;
-      }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
     }
     next();
   });

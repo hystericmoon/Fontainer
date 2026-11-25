@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Duration;
+use tauri::Manager;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -59,7 +60,12 @@ fn parse_form_urlencoded(body: &str) -> HashMap<String, String> {
     map
 }
 
-fn html_response(status_line: &str, title: &str, message: &str) -> String {
+fn html_response(status_line: &str, title: &str, message: &str, auto_close: bool) -> String {
+    let close_script = if auto_close {
+        r#"<script>setTimeout(function () { window.close(); }, 900);</script>"#
+    } else {
+        ""
+    };
     let body = format!(
         r#"<!doctype html>
 <html lang="en">
@@ -69,6 +75,12 @@ fn html_response(status_line: &str, title: &str, message: &str) -> String {
   <title>{title}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f6f6; color: #1b1b1b; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ background: #161616; color: #f5f5f5; }}
+      .card {{ background: #222; border-color: #333; }}
+      .badge {{ background: #f5f5f5; color: #111; }}
+      p {{ color: #aaa; }}
+    }}
     .card {{ background: #fff; border: 1px solid #e5e5e5; border-radius: 14px; padding: 28px 32px; max-width: 400px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.06); }}
     .badge {{ width: 40px; height: 40px; border-radius: 10px; background: #1b1b1b; color: #fff; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 14px; }}
     h1 {{ font-size: 17px; margin: 0 0 8px; }}
@@ -81,6 +93,7 @@ fn html_response(status_line: &str, title: &str, message: &str) -> String {
     <h1>{title}</h1>
     <p>{message}</p>
   </div>
+  {close_script}
 </body>
 </html>"#
     );
@@ -141,6 +154,7 @@ async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Result<(String
 /// receives the Google OAuth credentials over a local one-shot loopback POST, and returns them to Tauri.
 #[tauri::command]
 pub async fn start_desktop_auth_session(
+    app: tauri::AppHandle,
     auth_base_url: String,
     request_drive_scope: bool,
 ) -> Result<DesktopAuthTokens, String> {
@@ -185,6 +199,7 @@ pub async fn start_desktop_auth_session(
                     "404 Not Found",
                     "Waiting for Fontainer Sign-In",
                     "Complete sign-in in the Fontainer browser tab.",
+                    false,
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 continue;
@@ -197,6 +212,7 @@ pub async fn start_desktop_auth_session(
                     "400 Bad Request",
                     "Sign-In Session Mismatch",
                     "This sign-in link expired or did not match. Please try again from Fontainer.",
+                    false,
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 return Err("Sign-in state mismatch. Please try again.".to_string());
@@ -207,6 +223,7 @@ pub async fn start_desktop_auth_session(
                     "200 OK",
                     "Sign-In Cancelled",
                     "You can close this tab and return to Fontainer.",
+                    true,
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 return Err(err_msg.clone());
@@ -223,6 +240,7 @@ pub async fn start_desktop_auth_session(
                     "400 Bad Request",
                     "Missing Google Credential",
                     "Google did not return an ID token. Please try signing in again.",
+                    false,
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 return Err("Missing Google ID token from desktop sign-in.".to_string());
@@ -231,9 +249,17 @@ pub async fn start_desktop_auth_session(
             let resp = html_response(
                 "200 OK",
                 "Signed in to Fontainer",
-                "Your Mac & Windows font sync is now connected. You can close this tab and return to Fontainer.",
+                "Returning to Fontainer… You can safely close this browser tab.",
+                true,
             );
             let _ = stream.write_all(resp.as_bytes()).await;
+
+            // Bring the Fontainer desktop app window right back to the front
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
 
             return Ok(DesktopAuthTokens {
                 id_token,

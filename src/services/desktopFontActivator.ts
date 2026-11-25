@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.2.1';
 export const GITHUB_REPO = 'hystericmoon/Fontainer';
 export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
 export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
