@@ -191,16 +191,16 @@ export async function fetchLiveFontshareFonts(
   };
 
   const rawItems = data.items ?? [];
-  // Fontshare returns raw popularity/trending scores (higher = more popular).
+  // Fontshare returns lower numbers for more popular / trending fonts (e.g. Satoshi = 92, Clash Display = 144).
   // Convert them into 1..N ranks (1 = most popular/trending) to match Google Fonts sorting.
   const popRankMap = new Map<string, number>();
   [...rawItems]
-    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
+    .sort((a, b) => (a.popularity ?? 999999) - (b.popularity ?? 999999))
     .forEach((it, idx) => popRankMap.set(it.slug, idx + 1));
 
   const trendRankMap = new Map<string, number>();
   [...rawItems]
-    .sort((a, b) => (b.trending ?? 0) - (a.trending ?? 0))
+    .sort((a, b) => (a.trending ?? 999999) - (b.trending ?? 999999))
     .forEach((it, idx) => trendRankMap.set(it.slug, idx + 1));
 
   const fonts: FontFamily[] = rawItems.map((item) => {
