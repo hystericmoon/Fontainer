@@ -12,17 +12,26 @@ import {
   fetchAdobeFontsKit,
   fetchGoogleDriveFileMetadata,
   fetchLiveGoogleFonts,
+  groupDriveFilesIntoFamilies,
+  listGoogleDriveFonts,
   type RemoteFontFile,
 } from '../services/cloudProviders';
 import {
   activateCachedFontInOs,
   activateFontBinaryInOs,
   activateGoogleFontInOs,
+  activateLocalDriveFolderZeroCopy,
+  batchActivateDriveFonts,
+  batchDeactivateOsFonts,
   deactivateOsFont,
+  detectLocalGoogleDriveFolders,
   extractDriveFileId,
   getOsFontStatus,
   isTauriDesktop,
   openOsFontsFolder,
+  subscribeBatchProgress,
+  type DetectedLocalDriveFolder,
+  type DriveBatchFontItem,
 } from '../services/desktopFontActivator';
 import {
   clearGoogleDriveAccessToken,
@@ -163,6 +172,13 @@ export function useFontainerStore() {
   const [osSyncBusy, setOsSyncBusy] = useState(false);
   const [pendingDriveSyncIds, setPendingDriveSyncIds] = useState<string[]>([]);
   const [osSyncNonce, setOsSyncNonce] = useState(0);
+  const [localDriveFolders, setLocalDriveFolders] = useState<DetectedLocalDriveFolder[]>([]);
+  const [bulkProgress, setBulkProgress] = useState<{
+    label: string;
+    completed: number;
+    total: number;
+    currentName?: string;
+  } | null>(null);
 
   // Live Font Sources (Zero fake data)
   const [googleFonts, setGoogleFonts] = useState<FontFamily[]>([]);
@@ -811,6 +827,83 @@ export function useFontainerStore() {
     [fontLists, batchSetActivation],
   );
 
+  const activateAllInLibrary = useCallback(
+    async (libraryId: string, active: boolean) => {
+      const libFonts = fonts.filter((f) => f.libraryId === libraryId);
+      if (libFonts.length === 0) {
+        showToast('No fonts in this library yet');
+        return;
+      }
+
+      const ids = libFonts.map((f) => f.id);
+      batchSetActivation(ids, active);
+
+      if (isDesktop && !active) {
+        const osIdsToRemove: string[] = [];
+        for (const f of libFonts) {
+          osIdsToRemove.push(f.id);
+          if (f.driveFiles) {
+            for (const df of f.driveFiles) osIdsToRemove.push(df.fontId);
+          }
+        }
+        try {
+          await batchDeactivateOsFonts(Array.from(new Set(osIdsToRemove)));
+          for (const id of osIdsToRemove) osActiveIdsRef.current.delete(id);
+          setOsActiveCount(osActiveIdsRef.current.size);
+        } catch {
+          // reconcile loop will retry cleanly
+        }
+      } else if (isDesktop && active && libraryId === 'lib-gdrive') {
+        const token = getGoogleDriveAccessToken() ?? '';
+        const batchItems: DriveBatchFontItem[] = [];
+        for (const f of libFonts) {
+          if (f.driveFiles && f.driveFiles.length > 0) {
+            for (const df of f.driveFiles) {
+              batchItems.push({
+                fontId: df.fontId,
+                fileId: df.fileId,
+                displayName: f.name,
+                fileName: df.fileName,
+              });
+            }
+          } else if (f.driveFileId && f.driveFileName) {
+            batchItems.push({
+              fontId: f.id,
+              fileId: f.driveFileId,
+              displayName: f.name,
+              fileName: f.driveFileName,
+            });
+          }
+        }
+        if (batchItems.length > 0) {
+          setBulkProgress({
+            label: 'Activating Google Drive fonts',
+            completed: 0,
+            total: batchItems.length,
+          });
+          try {
+            const summary = await batchActivateDriveFonts(token, batchItems);
+            if (summary) {
+              osActiveIdsRef.current = new Set(summary.activeFontIds);
+              setOsActiveCount(summary.activeFontIds.length);
+              if (summary.authExpired) {
+                invalidateDriveToken();
+                showToast('Reconnect Google Drive to download remaining uncached fonts');
+              } else {
+                showToast(
+                  `Activated ${summary.activated + summary.skipped} Google Drive font files with zero lag`,
+                );
+              }
+            }
+          } finally {
+            setBulkProgress(null);
+          }
+        }
+      }
+    },
+    [fonts, batchSetActivation, isDesktop, invalidateDriveToken, showToast],
+  );
+
   // Smart Lists
   const createSmartList = useCallback(
     (smart: Omit<SmartList, 'id'>) => {
@@ -926,11 +1019,12 @@ export function useFontainerStore() {
     [destination, navigate, showToast, user],
   );
 
-  // REAL Google Drive Import (bounded concurrency + automatic expired-token handling)
+  // REAL Google Drive Import — Zero-Lag Rust Batch Engine on Desktop + Family Grouping on all platforms
   const importGoogleDriveFiles = useCallback(
     async (files: RemoteFontFile[]) => {
       const token = getGoogleDriveAccessToken();
       if (!token) throw new DriveAuthExpiredError('Sign in with Google to access Google Drive.');
+      if (files.length === 0) return 0;
 
       const libId = 'lib-gdrive';
       ensureLibraryExists({
@@ -942,45 +1036,18 @@ export function useFontainerStore() {
         autoSync: true,
       });
 
-      const imported: FontFamily[] = [];
-      const CONCURRENCY = 4;
-      let cursor = 0;
-      let authError: DriveAuthExpiredError | null = null;
-
-      async function worker() {
-        while (cursor < files.length && !authError) {
-          const idx = cursor++;
-          const file = files[idx];
-          try {
-            const family = await downloadGoogleDriveFont(token!, file, libId);
-            imported.push(family);
-          } catch (err) {
-            if (err instanceof DriveAuthExpiredError) {
-              authError = err;
-              return;
-            }
-            // continue loading remaining valid font files
-          }
-        }
-      }
-
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, files.length) }, () => worker()),
-      );
-
-      if (authError) {
-        invalidateDriveToken();
-        throw authError;
-      }
-
-      if (imported.length > 0) {
-        const importedIdSet = new Set(imported.map((f) => f.id));
+      // Desktop Zero-Lag Path: group all files into families in <5ms, then let Rust download &
+      // activate all .ttf/.otf files in parallel off the UI thread with 1 single OS refresh!
+      if (isDesktop) {
+        const groupedFamilies = groupDriveFilesIntoFamilies(files, libId, true);
+        const groupedIdSet = new Set(groupedFamilies.map((f) => f.id));
         setCustomFonts((prev) => [
-          ...imported,
-          ...prev.filter((f) => !importedIdSet.has(f.id)),
+          ...groupedFamilies,
+          ...prev.filter((f) => !groupedIdSet.has(f.id) && f.libraryId !== libId),
         ]);
+
         const currentMeta = fontMetaRef.current;
-        const metaBatch: CloudFontMeta[] = imported.map((family) => {
+        const metaBatch: CloudFontMeta[] = groupedFamilies.map((family) => {
           const existing = currentMeta[family.id];
           return {
             fontId: family.id,
@@ -992,21 +1059,236 @@ export function useFontainerStore() {
         });
         setFontMeta((prev) => {
           const next = { ...prev };
-          for (const item of metaBatch) {
-            next[item.fontId] = item;
-          }
+          for (const item of metaBatch) next[item.fontId] = item;
           return next;
         });
         if (user) {
           void saveFontMetaBatch(user.uid, metaBatch);
         }
-        setSelectedFontId(imported[0].id);
-        navigate({ type: 'library', id: libId });
-        showToast(`Loaded ${imported.length} real font ${imported.length === 1 ? 'file' : 'files'} from Google Drive`);
+
+        if (groupedFamilies.length > 0) {
+          setSelectedFontId(groupedFamilies[0].id);
+          navigate({ type: 'library', id: libId });
+        }
+
+        const batchItems: DriveBatchFontItem[] = [];
+        for (const fam of groupedFamilies) {
+          for (const df of fam.driveFiles ?? []) {
+            batchItems.push({
+              fontId: df.fontId,
+              fileId: df.fileId,
+              displayName: fam.name,
+              fileName: df.fileName,
+            });
+          }
+        }
+
+        setBulkProgress({
+          label: `Activating ${groupedFamilies.length} Google Drive families`,
+          completed: 0,
+          total: batchItems.length,
+        });
+        try {
+          const summary = await batchActivateDriveFonts(token, batchItems);
+          if (summary) {
+            osActiveIdsRef.current = new Set(summary.activeFontIds);
+            setOsActiveCount(summary.activeFontIds.length);
+            if (summary.authExpired) {
+              invalidateDriveToken();
+              throw new DriveAuthExpiredError();
+            }
+            showToast(
+              `Activated ${groupedFamilies.length} Google Drive families (${summary.activated + summary.skipped} font files) in OS Fonts`,
+            );
+          }
+        } finally {
+          setBulkProgress(null);
+        }
+
+        return groupedFamilies.length;
       }
-      return imported.length;
+
+      // Web Browser Path: bounded concurrency + family grouping without exhausting browser memory
+      const previewBatch = files.slice(0, 60);
+      const imported: FontFamily[] = [];
+      const CONCURRENCY = 4;
+      let cursor = 0;
+      let authError: DriveAuthExpiredError | null = null;
+
+      async function worker() {
+        while (cursor < previewBatch.length && !authError) {
+          const idx = cursor++;
+          const file = previewBatch[idx];
+          try {
+            const family = await downloadGoogleDriveFont(token!, file, libId);
+            imported.push(family);
+          } catch (err) {
+            if (err instanceof DriveAuthExpiredError) {
+              authError = err;
+              return;
+            }
+          }
+        }
+      }
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, previewBatch.length) }, () => worker()),
+      );
+
+      if (authError) {
+        invalidateDriveToken();
+        throw authError;
+      }
+
+      // Also include any remaining files beyond 60 as lightweight grouped families so Cloud Sync still tracks them
+      const remainingFamilies =
+        files.length > 60 ? groupDriveFilesIntoFamilies(files.slice(60), libId, true) : [];
+      const allImported = [...imported, ...remainingFamilies];
+
+      if (allImported.length > 0) {
+        const importedIdSet = new Set(allImported.map((f) => f.id));
+        setCustomFonts((prev) => [
+          ...allImported,
+          ...prev.filter((f) => !importedIdSet.has(f.id)),
+        ]);
+        const currentMeta = fontMetaRef.current;
+        const metaBatch: CloudFontMeta[] = allImported.map((family) => {
+          const existing = currentMeta[family.id];
+          return {
+            fontId: family.id,
+            starred: existing?.starred ?? false,
+            activated: true,
+            tags: existing?.tags?.length ? existing.tags : family.tags,
+            notes: existing?.notes || family.notes,
+          };
+        });
+        setFontMeta((prev) => {
+          const next = { ...prev };
+          for (const item of metaBatch) next[item.fontId] = item;
+          return next;
+        });
+        if (user) {
+          void saveFontMetaBatch(user.uid, metaBatch);
+        }
+        setSelectedFontId(allImported[0].id);
+        navigate({ type: 'library', id: libId });
+        showToast(
+          `Loaded ${allImported.length} font ${allImported.length === 1 ? 'family' : 'families'} from Google Drive`,
+        );
+      }
+      return allImported.length;
     },
-    [ensureLibraryExists, invalidateDriveToken, navigate, showToast, user],
+    [ensureLibraryExists, invalidateDriveToken, isDesktop, navigate, showToast, user],
+  );
+
+  // 1-Click Activate Entire Google Drive Font Library (Full pagination, zero-lag)
+  const activateAllGoogleDriveFonts = useCallback(async () => {
+    let token = getGoogleDriveAccessToken();
+    if (!token) {
+      const res = await handleSignInGoogle(true);
+      if (res?.redirected) return 0;
+      token = getGoogleDriveAccessToken();
+    }
+    if (!token) {
+      throw new DriveAuthExpiredError('Grant Google Drive access to activate your Drive fonts.');
+    }
+    setBulkProgress({
+      label: 'Scanning entire Google Drive for fonts…',
+      completed: 0,
+      total: 0,
+    });
+    try {
+      const allFiles = await listGoogleDriveFonts(token);
+      if (allFiles.length === 0) {
+        showToast('No .ttf, .otf, .woff, or .woff2 font files found in Google Drive');
+        return 0;
+      }
+      return await importGoogleDriveFiles(allFiles);
+    } finally {
+      setBulkProgress(null);
+    }
+  }, [handleSignInGoogle, importGoogleDriveFiles, showToast]);
+
+  // Zero-Copy Local Google Drive Desktop Folder Activation (RightFont-style instant in-place)
+  const activateLocalDriveZeroCopy = useCallback(
+    async (folderPath: string, label = 'Google Drive (Local)') => {
+      if (!isDesktop) return 0;
+      setBulkProgress({
+        label: `Activating ${label} in-place (zero-copy)…`,
+        completed: 0,
+        total: 0,
+      });
+      try {
+        const res = await activateLocalDriveFolderZeroCopy(folderPath);
+        if (!res || res.fonts.length === 0) {
+          showToast(`No .ttf or .otf fonts found inside ${label}`);
+          return 0;
+        }
+        const libId = `lib-gdrive-local-${folderPath.replace(/[^a-zA-Z0-9]/g, '').slice(-12)}`;
+        ensureLibraryExists({
+          id: libId,
+          name: label,
+          provider: 'gdrive',
+          path: folderPath,
+          syncedAt: new Date().toISOString(),
+          autoSync: true,
+        });
+        const now = new Date().toISOString();
+        const families: FontFamily[] = res.fonts.map((nf) => {
+          const slug = `localzc-${nf.family.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+          const format = nf.format === 'OTF' ? 'OTF' : 'TTF';
+          return {
+            id: slug,
+            name: nf.family,
+            cssFamily: `'${nf.family}', sans-serif`,
+            foundry: label,
+            designer: 'Zero-Copy Local Drive',
+            classification: 'Sans Serif',
+            format,
+            width: 'Normal',
+            isVariable: false,
+            license: 'User Google Drive Font',
+            version: 'Local Sync',
+            languages: ['Latin'],
+            openTypeFeatures: ['liga', 'kern'],
+            libraryId: libId,
+            addedAt: now,
+            starred: false,
+            activated: true,
+            tags: ['google-drive', 'zero-copy'],
+            notes: `Zero-copy activated from ${nf.sourcePath}`,
+            sourcePath: nf.sourcePath,
+            styles: nf.styles.map((s, idx) => ({
+              id: `${slug}-${idx}`,
+              name: s.name || 'Regular',
+              weight: s.weight || 400,
+              italic: Boolean(s.italic),
+              postScriptName: s.postScriptName,
+              activated: true,
+              fileSizeKb: s.fileSizeKb,
+            })),
+          };
+        });
+        setCustomFonts((prev) => [
+          ...families,
+          ...prev.filter((f) => f.libraryId !== libId),
+        ]);
+        const status = await getOsFontStatus();
+        if (status) {
+          osActiveIdsRef.current = new Set(status.activeFontIds);
+          setOsActiveCount(status.activeFontIds.length);
+        }
+        setSelectedFontId(families[0].id);
+        navigate({ type: 'library', id: libId });
+        showToast(
+          `Instantly activated ${families.length} families (${res.activatedCount} files) in-place with zero copy`,
+        );
+        return families.length;
+      } finally {
+        setBulkProgress(null);
+      }
+    },
+    [ensureLibraryExists, isDesktop, navigate, showToast],
   );
 
   // REAL Local Mac / OS System Fonts Scan (queryLocalFonts)
@@ -1220,10 +1502,12 @@ export function useFontainerStore() {
     setOsSyncNonce((n) => n + 1);
   }, []);
 
-  // Load current OS font activator status on desktop startup
+  // Load current OS font activator status + detect local Google Drive Desktop folders + subscribe to batch progress
   useEffect(() => {
     if (!isDesktop) return;
     let mounted = true;
+    let unlistenProgress: (() => void) | null = null;
+
     void getOsFontStatus()
       .then((status) => {
         if (!mounted || !status) return;
@@ -1236,8 +1520,32 @@ export function useFontainerStore() {
       .catch(() => {
         if (mounted) setOsReady(true);
       });
+
+    void detectLocalGoogleDriveFolders()
+      .then((folders) => {
+        if (mounted) setLocalDriveFolders(folders);
+      })
+      .catch(() => {});
+
+    void subscribeBatchProgress((payload) => {
+      if (!mounted) return;
+      setBulkProgress((prev) => ({
+        label: prev?.label || 'Syncing fonts to OS',
+        completed: payload.completed,
+        total: payload.total,
+        currentName: payload.currentName,
+      }));
+    }).then((unlisten) => {
+      if (!mounted) {
+        unlisten();
+      } else {
+        unlistenProgress = unlisten;
+      }
+    });
+
     return () => {
       mounted = false;
+      if (unlistenProgress) unlistenProgress();
     };
   }, [isDesktop]);
 
@@ -1505,8 +1813,13 @@ export function useFontainerStore() {
     osActiveCount,
     osSyncBusy,
     pendingDriveSyncIds,
+    localDriveFolders,
+    bulkProgress,
     openOsFontsFolder: handleOpenOsFontsFolder,
     triggerOsFontResync,
+    activateAllGoogleDriveFonts,
+    activateLocalDriveZeroCopy,
+    activateAllInLibrary,
     // Live Sources
     googleLoading,
     googleError,

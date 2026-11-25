@@ -75,6 +75,7 @@ export interface FontFamily {
   adobeKitId?: string;
   driveFileId?: string;
   driveFileName?: string;
+  driveFiles?: Array<{ fontId: string; fileId: string; fileName: string }>;
   sourcePath?: string;
   customGlyphs?: string[];
   styles: FontStyleVariant[];

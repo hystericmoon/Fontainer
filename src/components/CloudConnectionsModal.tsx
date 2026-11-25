@@ -20,6 +20,7 @@ import {
   listGoogleDriveFonts,
   type RemoteFontFile,
 } from '../services/cloudProviders';
+import type { DetectedLocalDriveFolder } from '../services/desktopFontActivator';
 import { getGoogleDriveAccessToken } from '../services/firebase';
 import type { AdobeKitRecord, LibraryProvider } from '../types/font';
 
@@ -39,6 +40,9 @@ interface CloudConnectionsModalProps {
   onConnectAdobeKit: (kitId: string, name?: string) => Promise<number>;
   onRemoveAdobeKit: (kitId: string) => void;
   onImportGoogleDriveFiles: (files: RemoteFontFile[]) => Promise<number>;
+  onActivateAllGoogleDrive: () => Promise<number>;
+  localDriveFolders: DetectedLocalDriveFolder[];
+  onActivateLocalDriveZeroCopy: (folderPath: string, label: string) => Promise<number>;
   onScanSystemFonts: () => Promise<number>;
   onConnectLocalFolder: (provider: LibraryProvider, label: string) => Promise<number>;
   onOpenFileUpload: () => void;
@@ -93,6 +97,9 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
   onConnectAdobeKit,
   onRemoveAdobeKit,
   onImportGoogleDriveFiles,
+  onActivateAllGoogleDrive,
+  localDriveFolders,
+  onActivateLocalDriveZeroCopy,
   onScanSystemFonts,
   onConnectLocalFolder,
   onOpenFileUpload,
@@ -158,7 +165,7 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
       }
       const files = await listGoogleDriveFonts(token);
       setDriveFiles(files);
-      setSelectedDriveIds(files.slice(0, 25).map((f) => f.id));
+      setSelectedDriveIds(files.map((f) => f.id));
       if (files.length === 0) {
         onNotify('No .ttf, .otf, .woff, or .woff2 files found in Google Drive');
       }
@@ -188,6 +195,23 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
         setDriveFiles(null);
       }
       setDriveError(err instanceof Error ? err.message : 'Failed to download Google Drive fonts');
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  const handleActivateAllDrive = async () => {
+    setDriveBusy(true);
+    setDriveError('');
+    try {
+      const count = await onActivateAllGoogleDrive();
+      if (count > 0) onClose();
+    } catch (err) {
+      if (err instanceof DriveAuthExpiredError) {
+        onDriveTokenExpired();
+        setDriveFiles(null);
+      }
+      setDriveError(err instanceof Error ? err.message : 'Failed to activate Google Drive fonts');
     } finally {
       setDriveBusy(false);
     }
@@ -392,20 +416,29 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                     real OpenType metadata.
                   </p>
                 </div>
-                <div className="shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                   {user && hasDriveToken ? (
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      isDisabled={driveBusy}
-                      label={driveBusy ? 'Scanning…' : 'Scan Drive Fonts'}
-                      onClick={() => void handleScanGoogleDrive()}
-                    />
+                    <>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        isDisabled={driveBusy}
+                        label={driveBusy ? 'Activating…' : 'Activate All Drive Fonts'}
+                        onClick={() => void handleActivateAllDrive()}
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        isDisabled={driveBusy}
+                        label="Browse Files"
+                        onClick={() => void handleScanGoogleDrive()}
+                      />
+                    </>
                   ) : (
                     <GoogleSignInButton
                       disabled={driveBusy}
                       label={user ? 'Grant Drive Access' : 'Sign in with Google'}
-                      onClick={() => void handleScanGoogleDrive()}
+                      onClick={() => void handleActivateAllDrive()}
                     />
                   )}
                 </div>
@@ -415,14 +448,31 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
 
               {driveFiles && (
                 <div className="space-y-2 pt-2 border-t border-[var(--color-border)]">
-                  <div className="flex items-center justify-between text-[11px] text-[var(--color-text-secondary)]">
-                    <span>Found {driveFiles.length} font file(s) in Google Drive</span>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
+                    <div className="flex items-center gap-2">
+                      <span>Found {driveFiles.length.toLocaleString()} font file(s) in Google Drive</span>
+                      {driveFiles.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedDriveIds(
+                              selectedDriveIds.length === driveFiles.length
+                                ? []
+                                : driveFiles.map((f) => f.id),
+                            )
+                          }
+                          className="underline hover:text-[var(--color-text-primary)] cursor-pointer"
+                        >
+                          {selectedDriveIds.length === driveFiles.length ? 'Clear all' : 'Select all'}
+                        </button>
+                      )}
+                    </div>
                     {driveFiles.length > 0 && (
                       <Button
                         variant="primary"
                         size="sm"
                         isDisabled={driveBusy || selectedDriveIds.length === 0}
-                        label={`Import ${selectedDriveIds.length} Selected`}
+                        label={`Activate ${selectedDriveIds.length.toLocaleString()} Selected`}
                         onClick={() => void handleImportDriveSelected()}
                       />
                     )}
@@ -459,6 +509,59 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                 </div>
               )}
             </section>
+
+            {/* Auto-Detected Local Google Drive Desktop (Instant Zero-Copy Mode) */}
+            {localDriveFolders.length > 0 && (
+              <section className="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] space-y-2.5">
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-[13px]">
+                    Google Drive Desktop Detected (Instant Zero-Copy)
+                  </h3>
+                  <p className="text-[11.5px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                    Activate your entire synced Google Drive folder in-place with zero downloading
+                    and zero file copying — just like RightFont.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  {localDriveFolders.map((folder) => (
+                    <div
+                      key={folder.path}
+                      className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[var(--color-background-surface)] border border-[var(--color-border)]"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-medium truncate">{folder.label}</div>
+                        <div className="text-[10.5px] font-code text-[var(--color-text-secondary)] truncate">
+                          {folder.path}
+                        </div>
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        isDisabled={driveBusy}
+                        label="Activate All In-Place"
+                        onClick={async () => {
+                          setDriveBusy(true);
+                          setDriveError('');
+                          try {
+                            const count = await onActivateLocalDriveZeroCopy(
+                              folder.path,
+                              folder.label,
+                            );
+                            if (count > 0) onClose();
+                          } catch (err) {
+                            setDriveError(
+                              err instanceof Error ? err.message : 'Zero-copy activation failed',
+                            );
+                          } finally {
+                            setDriveBusy(false);
+                          }
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* iCloud Drive, Box, Nextcloud / Synced Folders */}
             <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] flex items-center justify-between gap-3">

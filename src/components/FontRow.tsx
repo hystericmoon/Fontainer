@@ -12,7 +12,11 @@ import {
 } from 'lucide-react';
 import type { FontFamily, FontList, PreviewSettings } from '../types/font';
 import { buildOpenTypeFeatureSettings, generateFontCssSnippet } from '../utils/fontFilter';
-import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
+import {
+  ensureAdobeKitStylesheet,
+  ensureCustomFontLoaded,
+  ensureGoogleFontLoaded,
+} from '../utils/fontLoader';
 
 interface FontRowProps {
   font: FontFamily;
@@ -62,7 +66,9 @@ export const FontRow: React.FC<FontRowProps> = ({
     const loadFace = () => {
       if (font.adobeKitId) {
         ensureAdobeKitStylesheet(font.adobeKitId);
-      } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
+      } else if (font.isCustomUpload) {
+        void ensureCustomFontLoaded(font.id, font.name);
+      } else if (font.libraryId === 'lib-google') {
         ensureGoogleFontLoaded(font.name, font.styles);
       }
     };

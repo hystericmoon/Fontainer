@@ -257,36 +257,234 @@ export class DriveAuthExpiredError extends Error {
   }
 }
 
-/** 3. Real Google Drive API v3 (client-side with in-memory Google access token) */
+/** 3. Real Google Drive API v3 — full pagination across entire Drive (no 200-file cap) */
 export async function listGoogleDriveFonts(accessToken: string): Promise<RemoteFontFile[]> {
   const q = encodeURIComponent(
     "trashed = false and (name contains '.ttf' or name contains '.otf' or name contains '.woff2' or name contains '.woff')",
   );
-  const fields = encodeURIComponent('files(id,name,size,modifiedTime,mimeType)');
-  const resp = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=200&orderBy=modifiedTime%20desc`,
-    {
-      signal: AbortSignal.timeout(15000),
-      headers: { Authorization: `Bearer ${accessToken}` },
-    },
-  );
-  if (resp.status === 401 || resp.status === 403) {
-    throw new DriveAuthExpiredError();
+  const fields = encodeURIComponent('nextPageToken,files(id,name,size,modifiedTime,mimeType)');
+  const allFiles: RemoteFontFile[] = [];
+  let pageToken = '';
+  const MAX_PAGES = 10; // Up to 10,000 font files
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const tokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+    const resp = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=1000&orderBy=modifiedTime%20desc${tokenParam}`,
+      {
+        signal: AbortSignal.timeout(20000),
+        headers: { Authorization: `Bearer ${accessToken}` },
+      },
+    );
+    if (resp.status === 401 || resp.status === 403) {
+      throw new DriveAuthExpiredError();
+    }
+    if (!resp.ok) {
+      throw new Error(`Google Drive returned HTTP ${resp.status}`);
+    }
+    const json = (await resp.json()) as {
+      nextPageToken?: string;
+      files?: Array<{ id: string; name: string; size?: string; modifiedTime?: string }>;
+    };
+
+    for (const f of json.files ?? []) {
+      if (/\.(ttf|otf|woff2?)$/i.test(f.name)) {
+        allFiles.push({
+          id: f.id,
+          name: f.name,
+          size: Number(f.size) || 0,
+          modifiedTime: f.modifiedTime,
+        });
+      }
+    }
+
+    if (!json.nextPageToken) break;
+    pageToken = json.nextPageToken;
   }
-  if (!resp.ok) {
-    throw new Error(`Google Drive returned HTTP ${resp.status}`);
-  }
-  const json = (await resp.json()) as {
-    files?: Array<{ id: string; name: string; size?: string; modifiedTime?: string }>;
+
+  return allFiles;
+}
+
+function parseDriveFileStyle(fileName: string): {
+  familyName: string;
+  styleName: string;
+  weight: number;
+  italic: boolean;
+  format: 'OTF' | 'TTF' | 'WOFF2' | 'Variable';
+} {
+  const lower = fileName.toLowerCase();
+  const base = fileName.replace(/\.(ttf|otf|woff2?)$/i, '');
+  const isVariable = /variable|vf\b/i.test(base);
+  const format = isVariable
+    ? 'Variable'
+    : lower.endsWith('.otf')
+      ? 'OTF'
+      : lower.endsWith('.woff2') || lower.endsWith('.woff')
+        ? 'WOFF2'
+        : 'TTF';
+
+  const normalized = base.replace(/_/g, ' ');
+  const dashIdx = normalized.indexOf('-');
+  const rawFamily = (dashIdx > 0 ? normalized.slice(0, dashIdx) : normalized)
+    .replace(/\b(thin|extralight|ultralight|light|regular|normal|medium|semibold|demibold|bold|extrabold|ultrabold|black|heavy|italic|oblique|variable|vf)\b/gi, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const familyName = rawFamily || base;
+
+  const italic = /italic|oblique/i.test(normalized);
+  const weight = /thin|hairline/i.test(normalized)
+    ? 100
+    : /extralight|ultralight/i.test(normalized)
+      ? 200
+      : /light/i.test(normalized)
+        ? 300
+        : /medium/i.test(normalized)
+          ? 500
+          : /semibold|demibold|demi/i.test(normalized)
+            ? 600
+            : /extrabold|ultrabold|heavy/i.test(normalized)
+              ? 800
+              : /black/i.test(normalized)
+                ? 900
+                : /bold/i.test(normalized)
+                  ? 700
+                  : 400;
+
+  const weightLabels: Record<number, string> = {
+    100: 'Thin',
+    200: 'ExtraLight',
+    300: 'Light',
+    400: 'Regular',
+    500: 'Medium',
+    600: 'SemiBold',
+    700: 'Bold',
+    800: 'ExtraBold',
+    900: 'Black',
   };
-  return (json.files ?? [])
-    .filter((f) => /\.(ttf|otf|woff2?)$/i.test(f.name))
-    .map((f) => ({
-      id: f.id,
-      name: f.name,
-      size: Number(f.size) || 0,
-      modifiedTime: f.modifiedTime,
-    }));
+  const wLabel = weightLabels[weight] ?? 'Regular';
+  const styleName = italic ? (weight === 400 ? 'Italic' : `${wLabel} Italic`) : wLabel;
+
+  return { familyName, styleName, weight, italic, format };
+}
+
+/**
+ * Instantly groups hundreds or thousands of Google Drive font files into clean Font Families
+ * (e.g. Regular, Bold, Italic under 1 family row) without downloading or blocking the UI thread.
+ */
+export function groupDriveFilesIntoFamilies(
+  files: RemoteFontFile[],
+  libraryId: string,
+  activated = true,
+): FontFamily[] {
+  const buckets = new Map<
+    string,
+    {
+      familyName: string;
+      format: 'OTF' | 'TTF' | 'WOFF2' | 'Variable';
+      addedAt: string;
+      files: Array<{
+        file: RemoteFontFile;
+        fontId: string;
+        styleName: string;
+        weight: number;
+        italic: boolean;
+      }>;
+    }
+  >();
+
+  for (const file of files) {
+    const parsed = parseDriveFileStyle(file.name);
+    const key = parsed.familyName.toLowerCase();
+    const fontId = makeDriveFontId(file.id);
+    const existing = buckets.get(key);
+    if (!existing) {
+      buckets.set(key, {
+        familyName: parsed.familyName,
+        format: parsed.format,
+        addedAt: file.modifiedTime || new Date().toISOString(),
+        files: [{ file, fontId, styleName: parsed.styleName, weight: parsed.weight, italic: parsed.italic }],
+      });
+    } else {
+      existing.files.push({
+        file,
+        fontId,
+        styleName: parsed.styleName,
+        weight: parsed.weight,
+        italic: parsed.italic,
+      });
+    }
+  }
+
+  const families: FontFamily[] = [];
+  for (const bucket of buckets.values()) {
+    bucket.files.sort((a, b) => a.weight - b.weight || Number(a.italic) - Number(b.italic));
+    const primary = bucket.files[0];
+    const lower = bucket.familyName.toLowerCase();
+    const classification: FontClassification = /mono|code|courier/i.test(lower)
+      ? 'Monospace'
+      : /slab/i.test(lower)
+        ? 'Slab Serif'
+        : /script|brush|callig/i.test(lower)
+          ? 'Script'
+          : /serif|garamond|bodoni|baskerville|times/i.test(lower)
+            ? 'Serif'
+            : /display|poster|condensed/i.test(lower)
+              ? 'Display'
+              : 'Sans Serif';
+    const fallback =
+      classification === 'Serif' || classification === 'Slab Serif'
+        ? 'serif'
+        : classification === 'Monospace'
+          ? 'monospace'
+          : 'sans-serif';
+
+    families.push({
+      id: primary.fontId,
+      name: bucket.familyName,
+      cssFamily: `'${bucket.familyName}', ${fallback}`,
+      foundry: 'Google Drive',
+      designer: 'Google Drive Cloud Library',
+      classification,
+      format: bucket.format,
+      width: /condensed|narrow/i.test(lower)
+        ? 'Condensed'
+        : /expanded|wide/i.test(lower)
+          ? 'Expanded'
+          : 'Normal',
+      isVariable: bucket.format === 'Variable',
+      license: 'User Google Drive Font',
+      version: 'Drive',
+      languages: ['Latin'],
+      openTypeFeatures: ['liga', 'kern'],
+      libraryId,
+      addedAt: bucket.addedAt,
+      starred: false,
+      activated,
+      tags: ['google-drive', bucket.format.toLowerCase()],
+      notes: `Google Drive (${bucket.files.length} ${bucket.files.length === 1 ? 'file' : 'files'})`,
+      isCustomUpload: true,
+      driveFileId: primary.file.id,
+      driveFileName: primary.file.name,
+      driveFiles: bucket.files.map((f) => ({
+        fontId: f.fontId,
+        fileId: f.file.id,
+        fileName: f.file.name,
+      })),
+      sourcePath: `Google Drive/${primary.file.name}`,
+      styles: bucket.files.map((f) => ({
+        id: `${f.fontId}-${f.weight}${f.italic ? 'i' : ''}`,
+        name: f.styleName,
+        weight: f.weight,
+        italic: f.italic,
+        postScriptName: `${bucket.familyName.replace(/\s+/g, '')}-${f.styleName.replace(/\s+/g, '')}`,
+        activated,
+        fileSizeKb: Math.max(1, Math.round(f.file.size / 1024)),
+      })),
+    });
+  }
+
+  return families.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function fetchGoogleDriveFileMetadata(

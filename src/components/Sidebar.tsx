@@ -54,6 +54,7 @@ interface SidebarProps {
   onActivateAllInList: (id: string, active: boolean) => void;
   onDeleteSmartList: (id: string) => void;
   onSyncLibrary: (id: string) => void;
+  onActivateAllInLibrary?: (id: string, active: boolean) => void;
   onDropFontOnList: (listId: string, fontId: string) => void;
   showInstallAction?: boolean;
   onOpenInstall?: () => void;
@@ -92,6 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onActivateAllInList,
   onDeleteSmartList,
   onSyncLibrary,
+  onActivateAllInLibrary,
   onDropFontOnList,
   showInstallAction = false,
   onOpenInstall,
@@ -107,6 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [dragOverListId, setDragOverListId] = useState<string | null>(null);
   const [openMenuListId, setOpenMenuListId] = useState<string | null>(null);
+  const [openMenuLibId, setOpenMenuLibId] = useState<string | null>(null);
 
   const rowShellClass = (active: boolean) =>
     `group relative w-full flex items-center justify-between gap-1 rounded-lg text-[13px] transition-colors ${
@@ -248,6 +251,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span className="truncate">{lib.name}</span>
                   </button>
                   <div className="flex items-center gap-1 pr-2.5 shrink-0">
+                    {onActivateAllInLibrary && lib.id !== 'lib-google' && (
+                      <button
+                        type="button"
+                        aria-label={`Actions for ${lib.name}`}
+                        title={`Activate or Deactivate all in ${lib.name}`}
+                        onClick={() => setOpenMenuLibId((cur) => (cur === lib.id ? null : lib.id))}
+                        className={`opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded transition-opacity cursor-pointer ${
+                          active
+                            ? 'text-white/90 dark:text-neutral-900/80 hover:bg-white/20 dark:hover:bg-black/10'
+                            : 'text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
+                        }`}
+                      >
+                        <MoreHorizontal className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       aria-label={`Sync ${lib.name}`}
@@ -263,6 +281,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </button>
                     <span className={countClass(active)}>{counts.libraryCounts[lib.id] ?? 0}</span>
                   </div>
+
+                  {openMenuLibId === lib.id && onActivateAllInLibrary && (
+                    <div
+                      role="menu"
+                      aria-label={`${lib.name} menu`}
+                      className="absolute right-2 top-8 z-30 w-44 py-1 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] shadow-lg text-[12px]"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onActivateAllInLibrary(lib.id, true);
+                          setOpenMenuLibId(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
+                      >
+                        Activate All Fonts
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          onActivateAllInLibrary(lib.id, false);
+                          setOpenMenuLibId(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
+                      >
+                        Deactivate All Fonts
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
             })}

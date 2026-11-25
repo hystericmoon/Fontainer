@@ -273,6 +273,7 @@ export default function App() {
             onActivateAllInList={store.activateAllInList}
             onDeleteSmartList={store.deleteSmartList}
             onSyncLibrary={store.syncLibrary}
+            onActivateAllInLibrary={(libId, active) => void store.activateAllInLibrary(libId, active)}
             onDropFontOnList={(listId, fontId) => store.addFontsToList(listId, [fontId])}
             showInstallAction={!pwa.isInstalled && !store.isDesktop}
             onOpenInstall={() => setActiveModal('install-mac')}
@@ -298,6 +299,43 @@ export default function App() {
             >
               <WifiOff className="w-3.5 h-3.5 shrink-0" />
               <span>Offline mode — local font library and cached specimens remain available.</span>
+            </div>
+          )}
+
+          {/* Live Bulk OS Activation Progress Bar */}
+          {store.bulkProgress && (
+            <div
+              role="status"
+              className="shrink-0 px-4 py-2 bg-[#F1F1F1] dark:bg-[#222222] border-b border-[var(--color-border)] text-[12px] space-y-1.5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="flex items-center gap-2 font-medium text-[var(--color-text-primary)] truncate">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span className="truncate">
+                    {store.bulkProgress.label}
+                    {store.bulkProgress.currentName ? ` — ${store.bulkProgress.currentName}` : ''}
+                  </span>
+                </span>
+                {store.bulkProgress.total > 0 && (
+                  <span className="font-code tabular-nums text-[11px] text-[var(--color-text-secondary)] shrink-0">
+                    {store.bulkProgress.completed.toLocaleString()} /{' '}
+                    {store.bulkProgress.total.toLocaleString()}
+                  </span>
+                )}
+              </div>
+              {store.bulkProgress.total > 0 && (
+                <div className="h-1 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-[#1b1b1b] dark:bg-[#f1f1f1] transition-all duration-150"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round((store.bulkProgress.completed / store.bulkProgress.total) * 100),
+                      )}%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -651,6 +689,9 @@ export default function App() {
           onConnectAdobeKit={store.connectAdobeKit}
           onRemoveAdobeKit={store.removeAdobeKit}
           onImportGoogleDriveFiles={store.importGoogleDriveFiles}
+          onActivateAllGoogleDrive={store.activateAllGoogleDriveFonts}
+          localDriveFolders={store.localDriveFolders}
+          onActivateLocalDriveZeroCopy={store.activateLocalDriveZeroCopy}
           onScanSystemFonts={store.scanSystemFonts}
           onConnectLocalFolder={store.connectLocalFolder}
           onOpenFileUpload={() => setActiveModal('import')}

@@ -9,6 +9,7 @@ const DB_VERSION = 1;
 const FONT_FILE_RE = /\.(ttf|otf|woff2?)$/i;
 const loadedGoogleFamilies = new Set<string>();
 const loadedAdobeKits = new Set<string>();
+const loadedCustomFontIds = new Set<string>();
 
 export interface StoredFontBlob {
   id: string;
@@ -77,6 +78,23 @@ export async function deleteStoredFontBuffer(id: string): Promise<void> {
   }
 }
 
+/** Lazily loads a single custom/Drive font preview from IndexedDB only when visible in viewport */
+export async function ensureCustomFontLoaded(fontId: string, familyName: string): Promise<void> {
+  if (typeof window === 'undefined' || typeof FontFace === 'undefined') return;
+  if (loadedCustomFontIds.has(fontId)) return;
+  loadedCustomFontIds.add(fontId);
+
+  try {
+    const rec = await getStoredFontBuffer(fontId);
+    if (!rec) return;
+    const face = new FontFace(familyName || rec.familyName, rec.buffer);
+    const loaded = await face.load();
+    document.fonts.add(loaded);
+  } catch {
+    // Non-fatal if preview binary isn't cached in IndexedDB (e.g. OS-activated directly by Rust)
+  }
+}
+
 export async function restoreUploadedFonts(): Promise<void> {
   if (typeof window === 'undefined' || typeof FontFace === 'undefined') return;
   try {
@@ -88,7 +106,10 @@ export async function restoreUploadedFonts(): Promise<void> {
       req.onerror = () => reject(req.error);
     });
 
-    for (const rec of records) {
+    // Only eagerly hydrate up to 30 fonts on startup; larger libraries lazy-load as rows enter view
+    for (const rec of records.slice(0, 30)) {
+      if (loadedCustomFontIds.has(rec.id)) continue;
+      loadedCustomFontIds.add(rec.id);
       try {
         const face = new FontFace(rec.familyName, rec.buffer);
         const loaded = await face.load();

@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Semaphore;
 
 /// Serializes manifest reads/writes and OS font operations across concurrent IPC calls.
 pub struct FontActivatorState {
@@ -32,6 +34,8 @@ pub struct InstalledFontFile {
     pub file_name: String,
     pub installed_path: String,
     pub registry_name: Option<String>,
+    #[serde(default)]
+    pub external_in_place: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +97,49 @@ pub struct ScannedSystemFont {
     pub format: String,
     pub source_path: String,
     pub styles: Vec<ScannedSystemStyle>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveBatchFontItem {
+    pub font_id: String,
+    pub file_id: String,
+    pub display_name: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchProgressPayload {
+    pub phase: String,
+    pub completed: usize,
+    pub total: usize,
+    pub current_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchActivationSummary {
+    pub activated: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub auth_expired: bool,
+    pub active_font_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedLocalDriveFolder {
+    pub label: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZeroCopyFolderResult {
+    pub folder_path: String,
+    pub activated_count: usize,
+    pub fonts: Vec<ScannedSystemFont>,
 }
 
 /// Returns the current OS platform label.
@@ -575,6 +622,7 @@ fn install_files_into_os(
             file_name,
             installed_path: dest_path.to_string_lossy().to_string(),
             registry_name,
+            external_in_place: false,
         });
     }
 
@@ -948,7 +996,8 @@ pub fn deactivate_os_font(
     for file in &entry.files {
         let path = Path::new(&file.installed_path);
         platform_os::unregister_font(path, file.registry_name.as_deref());
-        if path.exists() && fs::remove_file(path).is_ok() {
+        // Never delete the user's original files in zero-copy mounted folders (e.g. Google Drive Desktop)
+        if !file.external_in_place && path.exists() && fs::remove_file(path).is_ok() {
             removed += 1;
         }
     }
@@ -1175,6 +1224,427 @@ pub fn scan_system_fonts() -> Result<Vec<ScannedSystemFont>, String> {
     result.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
 
     Ok(result)
+}
+
+/// Zero-lag parallel batch activation for Google Drive fonts:
+/// - Downloads up to 8 font files concurrently directly in Rust (never sends megabytes over JS IPC)
+/// - Skips already-active and already-cached files
+/// - Registers every font and broadcasts ONE OS font refresh at the very end
+/// - Emits `font-sync-progress` events for a live progress bar
+#[tauri::command]
+pub async fn batch_activate_drive_fonts(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    access_token: String,
+    items: Vec<DriveBatchFontItem>,
+) -> Result<BatchActivationSummary, String> {
+    let total = items.len();
+    let fonts_dir = resolve_os_fonts_dir()?;
+    fs::create_dir_all(&fonts_dir)
+        .map_err(|e| format!("Could not prepare OS Fonts directory: {e}"))?;
+    let manifest_path = resolve_manifest_path(&app)?;
+
+    // Snapshot already-active IDs under lock so we can skip them immediately
+    let existing_active: HashSet<String> = {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let manifest = load_manifest(&manifest_path);
+        manifest
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.files.is_empty()
+                    && entry.files.iter().all(|f| Path::new(&f.installed_path).exists())
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+
+    let client = reqwest::Client::builder()
+        .user_agent("Fontainer/1.0")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .map_err(|e| format!("Failed to initialize HTTP client: {e}"))?;
+
+    let semaphore = Arc::new(Semaphore::new(8));
+    let completed_counter = Arc::new(AtomicUsize::new(0));
+    let auth_expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let token_arc = Arc::new(access_token);
+    let app_arc = Arc::new(app.clone());
+    let fonts_dir_arc = Arc::new(fonts_dir.clone());
+
+    let mut handles = Vec::with_capacity(total);
+
+    for item in items {
+        if existing_active.contains(&item.font_id) {
+            let done = completed_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app_arc.emit(
+                "font-sync-progress",
+                BatchProgressPayload {
+                    phase: "activate".to_string(),
+                    completed: done,
+                    total,
+                    current_name: item.display_name.clone(),
+                },
+            );
+            continue;
+        }
+
+        let lower_name = item.file_name.to_ascii_lowercase();
+        let ext = if lower_name.ends_with(".otf") {
+            "otf"
+        } else if lower_name.ends_with(".ttf") {
+            "ttf"
+        } else {
+            let done = completed_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app_arc.emit(
+                "font-sync-progress",
+                BatchProgressPayload {
+                    phase: "activate".to_string(),
+                    completed: done,
+                    total,
+                    current_name: item.display_name.clone(),
+                },
+            );
+            continue;
+        };
+
+        let permit_sem = Arc::clone(&semaphore);
+        let client_clone = client.clone();
+        let token_clone = Arc::clone(&token_arc);
+        let app_clone = Arc::clone(&app_arc);
+        let fonts_dir_clone = Arc::clone(&fonts_dir_arc);
+        let done_counter = Arc::clone(&completed_counter);
+        let auth_flag = Arc::clone(&auth_expired);
+
+        handles.push(tokio::spawn(async move {
+            let _permit = match permit_sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return None,
+            };
+
+            if auth_flag.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            let safe_id = sanitize_segment(&item.font_id);
+            let safe_stem = sanitize_segment(
+                Path::new(&item.file_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&item.display_name),
+            );
+            let cache_name = format!("{safe_stem}.{ext}");
+
+            let Ok(cache_dir) = resolve_font_cache_dir(&app_clone, &safe_id) else {
+                return None;
+            };
+
+            // 1. Check disk cache first (instant offline activation!)
+            let mut bytes = fs::read(cache_dir.join(&cache_name)).ok().filter(|b| b.len() >= 128);
+
+            // 2. Download directly from Google Drive API v3 if not cached
+            if bytes.is_none() {
+                if token_clone.trim().is_empty() {
+                    auth_flag.store(true, Ordering::Relaxed);
+                    return None;
+                }
+                let url = format!(
+                    "https://www.googleapis.com/drive/v3/files/{}?alt=media",
+                    encode_google_family(&item.file_id)
+                );
+                match client_clone
+                    .get(&url)
+                    .bearer_auth(token_clone.as_str())
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().as_u16() == 401 || resp.status().as_u16() == 403 => {
+                        auth_flag.store(true, Ordering::Relaxed);
+                        return None;
+                    }
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(downloaded) = resp.bytes().await {
+                            let vec = downloaded.to_vec();
+                            if vec.len() >= 128 {
+                                let _ = fs::write(cache_dir.join(&cache_name), &vec);
+                                bytes = Some(vec);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            let Some(font_bytes) = bytes else {
+                let done = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                let _ = app_clone.emit(
+                    "font-sync-progress",
+                    BatchProgressPayload {
+                        phase: "activate".to_string(),
+                        completed: done,
+                        total,
+                        current_name: item.display_name.clone(),
+                    },
+                );
+                return None;
+            };
+
+            // 3. Write to OS Fonts dir & register (without broadcasting WM_FONTCHANGE per file!)
+            let installed_file_name = format!("Fontainer_{safe_id}_{cache_name}");
+            let dest_path = fonts_dir_clone.join(&installed_file_name);
+            if fs::write(&dest_path, &font_bytes).is_err() {
+                return None;
+            }
+            let reg_name = platform_os::register_font(&dest_path, &item.display_name).ok().flatten();
+
+            let done = done_counter.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app_clone.emit(
+                "font-sync-progress",
+                BatchProgressPayload {
+                    phase: "activate".to_string(),
+                    completed: done,
+                    total,
+                    current_name: item.display_name.clone(),
+                },
+            );
+
+            Some(ManifestFontEntry {
+                font_id: item.font_id,
+                display_name: item.display_name,
+                source: "gdrive".to_string(),
+                files: vec![InstalledFontFile {
+                    file_name: installed_file_name,
+                    installed_path: dest_path.to_string_lossy().to_string(),
+                    registry_name: reg_name,
+                    external_in_place: false,
+                }],
+            })
+        }));
+    }
+
+    let mut newly_installed = Vec::new();
+    let mut failed = 0usize;
+    for handle in handles {
+        match handle.await {
+            Ok(Some(entry)) => newly_installed.push(entry),
+            _ => failed += 1,
+        }
+    }
+
+    let activated_count = newly_installed.len();
+    let skipped_count = total.saturating_sub(activated_count + failed);
+
+    // Single manifest commit + SINGLE OS font-change broadcast at the end!
+    let active_font_ids = {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let mut manifest = load_manifest(&manifest_path);
+        manifest.version = 1;
+        for entry in newly_installed {
+            manifest.entries.insert(entry.font_id.clone(), entry);
+        }
+        if activated_count > 0 {
+            platform_os::broadcast_font_change();
+            save_manifest(&manifest_path, &manifest)?;
+        }
+        let mut ids: Vec<String> = manifest.entries.keys().cloned().collect();
+        ids.sort();
+        ids
+    };
+
+    Ok(BatchActivationSummary {
+        activated: activated_count,
+        skipped: skipped_count,
+        failed,
+        auth_expired: auth_expired.load(Ordering::Relaxed),
+        active_font_ids,
+    })
+}
+
+/// Zero-lag batch deactivation: unregisters & removes all requested font IDs with ONE OS broadcast.
+#[tauri::command]
+pub fn batch_deactivate_os_fonts(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    font_ids: Vec<String>,
+) -> Result<usize, String> {
+    let manifest_path = resolve_manifest_path(&app)?;
+    let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+    let mut manifest = load_manifest(&manifest_path);
+
+    let mut removed_entries = 0usize;
+    for fid in &font_ids {
+        if let Some(entry) = manifest.entries.remove(fid) {
+            removed_entries += 1;
+            for file in &entry.files {
+                let path = Path::new(&file.installed_path);
+                platform_os::unregister_font(path, file.registry_name.as_deref());
+                if !file.external_in_place && path.exists() {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+
+    if removed_entries > 0 {
+        platform_os::broadcast_font_change();
+        save_manifest(&manifest_path, &manifest)?;
+    }
+
+    Ok(removed_entries)
+}
+
+/// Auto-detects locally synced Google Drive for Desktop folders on macOS & Windows
+/// for instant zero-copy activation (RightFont-style).
+#[tauri::command]
+pub fn detect_local_google_drive_folders() -> Vec<DetectedLocalDriveFolder> {
+    let mut found = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let cloud_storage = home.join("Library").join("CloudStorage");
+            if let Ok(entries) = fs::read_dir(&cloud_storage) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("GoogleDrive-") && entry.path().is_dir() {
+                        let my_drive = entry.path().join("My Drive");
+                        let target = if my_drive.is_dir() { my_drive } else { entry.path() };
+                        let label = name.replace("GoogleDrive-", "Google Drive (") + ")";
+                        found.push(DetectedLocalDriveFolder {
+                            label,
+                            path: target.to_string_lossy().to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for drive_letter in ['G', 'H', 'D', 'E'] {
+            let candidate = PathBuf::from(format!("{drive_letter}:\\My Drive"));
+            if candidate.is_dir() {
+                found.push(DetectedLocalDriveFolder {
+                    label: format!("Google Drive ({drive_letter}:\\My Drive)"),
+                    path: candidate.to_string_lossy().to_string(),
+                });
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            let legacy = home.join("Google Drive");
+            if legacy.is_dir() {
+                found.push(DetectedLocalDriveFolder {
+                    label: "Google Drive".to_string(),
+                    path: legacy.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+
+    found
+}
+
+/// Instant Zero-Copy Activation: scans a local synced Google Drive (or any local folder)
+/// and registers every .ttf/.otf file IN-PLACE with macOS CoreText / Windows GDI without copying files.
+#[tauri::command]
+pub fn activate_local_drive_folder_zero_copy(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    folder_path: String,
+) -> Result<ZeroCopyFolderResult, String> {
+    let root = PathBuf::from(&folder_path);
+    if !root.is_dir() {
+        return Err(format!("Folder does not exist: {folder_path}"));
+    }
+
+    let mut font_files = Vec::new();
+    walk_font_dir(&root, 0, &mut font_files);
+
+    let manifest_path = resolve_manifest_path(&app)?;
+    let mut grouped: HashMap<String, ScannedSystemFont> = HashMap::new();
+    let mut new_entries: Vec<ManifestFontEntry> = Vec::new();
+    let mut activated_count = 0usize;
+
+    for path in font_files {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "ttf" && ext != "otf" {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let (family, style_name, weight, italic) = parse_filename_family_and_style(stem);
+        let size_kb = fs::metadata(&path).map(|m| (m.len() / 1024).max(1)).unwrap_or(0);
+        let format = if ext == "otf" { "OTF" } else { "TTF" }.to_string();
+
+        let reg_name = platform_os::register_font(&path, &family).ok().flatten();
+        activated_count += 1;
+
+        let font_id = format!("localzc-{}", sanitize_segment(&format!("{family}-{stem}")));
+        new_entries.push(ManifestFontEntry {
+            font_id,
+            display_name: family.clone(),
+            source: "local-zero-copy".to_string(),
+            files: vec![InstalledFontFile {
+                file_name: file_name.to_string(),
+                installed_path: path.to_string_lossy().to_string(),
+                registry_name: reg_name,
+                external_in_place: true,
+            }],
+        });
+
+        let key = family.to_ascii_lowercase();
+        let entry = grouped.entry(key).or_insert_with(|| ScannedSystemFont {
+            family: family.clone(),
+            format,
+            source_path: path.to_string_lossy().to_string(),
+            styles: Vec::new(),
+        });
+        let ps_name = format!("{}-{}", family.replace(' ', ""), style_name.replace(' ', ""));
+        if !entry.styles.iter().any(|s| s.weight == weight && s.italic == italic) {
+            entry.styles.push(ScannedSystemStyle {
+                name: style_name,
+                weight,
+                italic,
+                post_script_name: ps_name,
+                file_size_kb: size_kb,
+            });
+        }
+    }
+
+    if activated_count > 0 {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let mut manifest = load_manifest(&manifest_path);
+        manifest.version = 1;
+        for entry in new_entries {
+            manifest.entries.insert(entry.font_id.clone(), entry);
+        }
+        platform_os::broadcast_font_change();
+        save_manifest(&manifest_path, &manifest)?;
+    }
+
+    let mut fonts: Vec<ScannedSystemFont> = grouped
+        .into_values()
+        .map(|mut f| {
+            f.styles.sort_by(|a, b| a.weight.cmp(&b.weight).then(a.italic.cmp(&b.italic)));
+            f
+        })
+        .collect();
+    fonts.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
+
+    Ok(ZeroCopyFolderResult {
+        folder_path,
+        activated_count,
+        fonts,
+    })
 }
 
 #[cfg(test)]

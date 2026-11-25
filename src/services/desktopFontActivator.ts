@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export interface OsFontStatus {
   platform: 'macos' | 'windows' | 'linux' | string;
@@ -43,6 +44,39 @@ export interface NativeScannedSystemFont {
   format: string;
   sourcePath: string;
   styles: NativeScannedSystemStyle[];
+}
+
+export interface DriveBatchFontItem {
+  fontId: string;
+  fileId: string;
+  displayName: string;
+  fileName: string;
+}
+
+export interface BatchProgressPayload {
+  phase: string;
+  completed: number;
+  total: number;
+  currentName: string;
+}
+
+export interface BatchActivationSummary {
+  activated: number;
+  skipped: number;
+  failed: number;
+  authExpired: boolean;
+  activeFontIds: string[];
+}
+
+export interface DetectedLocalDriveFolder {
+  label: string;
+  path: string;
+}
+
+export interface ZeroCopyFolderResult {
+  folderPath: string;
+  activatedCount: number;
+  fonts: NativeScannedSystemFont[];
 }
 
 export const DEFAULT_HOSTED_WEB_URL = 'https://fontainer-alpha.vercel.app';
@@ -160,6 +194,46 @@ export async function openOsFontsFolder(): Promise<string | null> {
 export async function scanSystemFontsNative(): Promise<NativeScannedSystemFont[]> {
   if (!isTauriDesktop()) return [];
   return invoke<NativeScannedSystemFont[]>('scan_system_fonts');
+}
+
+export async function batchActivateDriveFonts(
+  accessToken: string,
+  items: DriveBatchFontItem[],
+): Promise<BatchActivationSummary | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<BatchActivationSummary>('batch_activate_drive_fonts', {
+    accessToken,
+    items,
+  });
+}
+
+export async function batchDeactivateOsFonts(fontIds: string[]): Promise<number> {
+  if (!isTauriDesktop() || fontIds.length === 0) return 0;
+  return invoke<number>('batch_deactivate_os_fonts', { fontIds });
+}
+
+export async function detectLocalGoogleDriveFolders(): Promise<DetectedLocalDriveFolder[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<DetectedLocalDriveFolder[]>('detect_local_google_drive_folders');
+}
+
+export async function activateLocalDriveFolderZeroCopy(
+  folderPath: string,
+): Promise<ZeroCopyFolderResult | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<ZeroCopyFolderResult>('activate_local_drive_folder_zero_copy', {
+    folderPath,
+  });
+}
+
+export async function subscribeBatchProgress(
+  onProgress: (payload: BatchProgressPayload) => void,
+): Promise<() => void> {
+  if (!isTauriDesktop()) return () => {};
+  const unlisten = await listen<BatchProgressPayload>('font-sync-progress', (event) => {
+    onProgress(event.payload);
+  });
+  return unlisten;
 }
 
 export async function startDesktopAuthSession(
