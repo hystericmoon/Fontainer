@@ -309,7 +309,7 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
         }}
       />
 
-      <div className="mt-3 space-y-4 pb-1 text-[13px] text-[var(--color-text-primary)]">
+      <div className="mt-3 space-y-4 pb-2 max-h-[68dvh] overflow-y-auto pr-1 text-[13px] text-[var(--color-text-primary)]">
         <SegmentedControl
           label="Connection Category"
           size="sm"

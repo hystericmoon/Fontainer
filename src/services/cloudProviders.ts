@@ -190,7 +190,20 @@ export async function fetchLiveFontshareFonts(
     }>;
   };
 
-  const fonts: FontFamily[] = (data.items ?? []).map((item) => {
+  const rawItems = data.items ?? [];
+  // Fontshare returns raw popularity/trending scores (higher = more popular).
+  // Convert them into 1..N ranks (1 = most popular/trending) to match Google Fonts sorting.
+  const popRankMap = new Map<string, number>();
+  [...rawItems]
+    .sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0))
+    .forEach((it, idx) => popRankMap.set(it.slug, idx + 1));
+
+  const trendRankMap = new Map<string, number>();
+  [...rawItems]
+    .sort((a, b) => (b.trending ?? 0) - (a.trending ?? 0))
+    .forEach((it, idx) => trendRankMap.set(it.slug, idx + 1));
+
+  const fonts: FontFamily[] = rawItems.map((item) => {
     const id = `fs-${item.slug}`;
     const classification = mapGoogleCategory(item.category);
     const fallback =
@@ -229,8 +242,8 @@ export async function fetchLiveFontshareFonts(
       openTypeFeatures: item.features?.length ? item.features : ['liga', 'kern'],
       libraryId,
       addedAt: item.addedAt || new Date().toISOString(),
-      popularityRank: item.popularity ?? 150,
-      trendingRank: item.trending ?? 150,
+      popularityRank: popRankMap.get(item.slug) ?? 150,
+      trendingRank: trendRankMap.get(item.slug) ?? 150,
       starred: false,
       activated: false,
       tags: ['fontshare', classification.toLowerCase().replace(/\s+/g, '-')],
@@ -380,7 +393,7 @@ export async function importGitHubFontRepo(
     cssFamily: `'${data.family}', sans-serif`,
     foundry: `GitHub (${data.repo})`,
     designer: data.repo.split('/')[0],
-    classification: /serif/i.test(data.family)
+    classification: /serif|times|garamond|baskerville|didot|bodoni|caslon|editorial/i.test(data.family)
       ? 'Serif'
       : /mono|code/i.test(data.family)
         ? 'Monospace'

@@ -19,7 +19,7 @@ import { CompareView } from './components/CompareView';
 import { FilterBar } from './components/FilterBar';
 import { FontGrid } from './components/FontGrid';
 import { FontRow } from './components/FontRow';
-import { IconLibraryView } from './components/IconLibraryView';
+import { ICON_CATALOG, IconLibraryView } from './components/IconLibraryView';
 import { InspectorPanel } from './components/InspectorPanel';
 import { InstallMacModal } from './components/InstallMacModal';
 import {
@@ -555,7 +555,10 @@ export default function App() {
 
           <Toolbar
             title={currentTitle}
-            resultCount={store.visibleFonts.length}
+            resultCount={
+              store.destination.type === 'icons' ? ICON_CATALOG.length : store.visibleFonts.length
+            }
+            resultUnit={store.destination.type === 'icons' ? 'icons' : undefined}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
             inspectorOpen={inspectorOpen}

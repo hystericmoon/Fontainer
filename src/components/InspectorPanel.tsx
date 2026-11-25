@@ -826,7 +826,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <Button
                   variant="secondary"
                   size="sm"
-                  label="Tailwind @theme"
+                  label="Tailwind"
                   icon={<Copy className="w-3 h-3" />}
                   onClick={() => {
                     const tw = [

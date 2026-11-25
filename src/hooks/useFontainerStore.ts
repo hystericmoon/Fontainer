@@ -1485,6 +1485,32 @@ export function useFontainerStore() {
   // Import ANY open-source GitHub font repository (UNCUT, Collletttivo, Open Foundry, etc.)
   const handleImportGitHubRepo = useCallback(
     async (rawRepo: string) => {
+      const normalizedQuery = rawRepo
+        .trim()
+        .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+        .replace(/\.git$/i, '')
+        .replace(/\/+$/, '')
+        .toLowerCase();
+      const existingIndie = indieFontsRef.current.find((f) =>
+        f.notes.toLowerCase().includes(`github.com/${normalizedQuery}`),
+      );
+      if (existingIndie) {
+        const curMeta = fontMetaRef.current[existingIndie.id];
+        const nextMeta: CloudFontMeta = {
+          fontId: existingIndie.id,
+          starred: curMeta?.starred ?? false,
+          activated: true,
+          tags: curMeta?.tags?.length ? curMeta.tags : existingIndie.tags,
+          notes: curMeta?.notes || existingIndie.notes,
+        };
+        setFontMeta((prev) => ({ ...prev, [existingIndie.id]: nextMeta }));
+        if (user) void saveFontMetaDoc(user.uid, nextMeta);
+        setSelectedFontId(existingIndie.id);
+        navigate({ type: 'library', id: 'lib-indie' });
+        showToast(`"${existingIndie.name}" is already in Indie Foundries — activated it for you`);
+        return;
+      }
+
       const family = await importGitHubFontRepo(rawRepo, 'lib-indie');
       setCustomFonts((prev) => [family, ...prev.filter((f) => f.id !== family.id)]);
       const existing = fontMetaRef.current[family.id];

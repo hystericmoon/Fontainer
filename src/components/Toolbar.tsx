@@ -41,6 +41,7 @@ import type {
 interface ToolbarProps {
   title: string;
   resultCount: number;
+  resultUnit?: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   inspectorOpen: boolean;
@@ -72,6 +73,7 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   title,
   resultCount,
+  resultUnit,
   sidebarOpen,
   onToggleSidebar,
   inspectorOpen,
@@ -171,13 +173,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               {title}
             </h1>
             <span className="hidden xl:inline text-[12px] font-code tabular-nums text-[var(--color-text-secondary)] whitespace-nowrap shrink-0">
-              {resultCount} {resultCount === 1 ? 'family' : 'families'}
+              {resultCount} {resultUnit ?? (resultCount === 1 ? 'family' : 'families')}
             </span>
           </div>
         </div>
 
         {/* Center Search Input */}
-        <div className="relative flex-1 max-w-[290px] min-w-[84px]">
+        <div className="relative flex-1 max-w-[290px] min-w-[140px]">
           <Search
             aria-hidden="true"
             className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -187,7 +189,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             type="search"
             value={filters.search}
             onChange={(e) => onUpdateFilters({ search: e.target.value })}
-            placeholder="Search fonts, foundries, tags…"
+            placeholder="Search fonts…"
             aria-label="Search fonts"
             className="w-full h-7 pl-8 pr-7 rounded-lg bg-[#F1F1F1] dark:bg-[#1B1B1B] border border-transparent focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1] focus:bg-white dark:focus:bg-[#141414] text-[12px] text-[var(--color-text-primary)] placeholder:text-neutral-400 outline-none transition-colors"
           />

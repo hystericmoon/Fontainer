@@ -29,6 +29,7 @@ import {
 import type { DesktopUpdateInfo } from '../services/desktopFontActivator';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
 import { GoogleSignInButton } from './CloudConnectionsModal';
+import { ICON_CATALOG } from './IconLibraryView';
 
 interface SidebarProps {
   destination: SidebarDestination;
@@ -158,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { dest: { type: 'deactivated' }, label: 'Deactivated', count: counts.deactivated, icon: <MinusCircle className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'starred' }, label: 'Starred', count: counts.starred, icon: <Star className="w-3.5 h-3.5 shrink-0" /> },
     { dest: { type: 'recent' }, label: 'Recently Added', count: counts.recent, icon: <Clock className="w-3.5 h-3.5 shrink-0" /> },
-    { dest: { type: 'icons' }, label: 'Icon Sets', count: 120, icon: <Sparkles className="w-3.5 h-3.5 shrink-0" /> },
+    { dest: { type: 'icons' }, label: 'Icon Sets', count: ICON_CATALOG.length, icon: <Sparkles className="w-3.5 h-3.5 shrink-0" /> },
   ];
 
   const getLibraryIcon = (provider: FontLibrary['provider']) => {

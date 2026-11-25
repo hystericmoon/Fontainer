@@ -133,7 +133,7 @@ interface IconEntry {
   Icon: LucideIcon;
 }
 
-const ICON_CATALOG: IconEntry[] = [
+export const ICON_CATALOG: IconEntry[] = [
   // Interface
   { name: 'Search', category: 'Interface', tags: ['find', 'lookup'], Icon: Search },
   { name: 'Home', category: 'Interface', tags: ['house', 'start'], Icon: Home },

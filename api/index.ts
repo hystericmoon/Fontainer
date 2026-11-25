@@ -584,8 +584,8 @@ const CURATED_INDIE_REPOS: Array<{
   { id: 'indie-uncut-sans', family: 'Uncut Sans', foundry: 'UNCUT', sourceCollection: 'UNCUT', sourceUrl: 'https://uncut.wtf', repo: 'kaspernordkvist/uncut_sans', branch: 'main', designer: 'Kasper Nordkvist (UNCUT)', category: 'Sans Serif', license: 'SIL OFL 1.1' },
   { id: 'indie-bricolage-grotesque', family: 'Bricolage Grotesque', foundry: 'UNCUT / Open Foundry', sourceCollection: 'UNCUT', sourceUrl: 'https://uncut.wtf', repo: 'ateliertriay/bricolage', branch: 'main', designer: 'Mathieu Triay', category: 'Display', license: 'SIL OFL 1.1' },
   { id: 'indie-space-grotesk', family: 'Space Grotesk', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'floriankarsten/space-grotesk', branch: 'master', designer: 'Florian Karsten', category: 'Sans Serif', license: 'SIL OFL 1.1' },
-  { id: 'indie-work-sans', family: 'Work Sans', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'weiweihuanghuang/Work-Sans', branch: 'master', designer: 'Wei Huang', category: 'Sans Serif', license: 'SIL OFL 1.1' },
-  { id: 'indie-syne', family: 'Syne', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'Bonjour-Monde/Fonderie', branch: 'master', designer: 'Bonjour Monde', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-jost', family: 'Jost*', foundry: 'indestructible type* (Open Foundry)', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'indestructible-type/Jost', branch: 'master', designer: 'Owen Earl', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-league-spartan', family: 'League Spartan', foundry: 'The League of Moveable Type (Open Foundry)', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'theleagueof/league-spartan', branch: 'master', designer: 'Matt Bailey & Tyler Finck', category: 'Sans Serif', license: 'SIL OFL 1.1' },
 ];
 
 async function fetchLiveIndieFoundriesCatalog(): Promise<CachedIndieCatalog> {
