@@ -30,6 +30,21 @@ export interface GoogleFontStylePayload {
   italic: boolean;
 }
 
+export interface NativeScannedSystemStyle {
+  name: string;
+  weight: number;
+  italic: boolean;
+  postScriptName: string;
+  fileSizeKb: number;
+}
+
+export interface NativeScannedSystemFont {
+  family: string;
+  format: string;
+  sourcePath: string;
+  styles: NativeScannedSystemStyle[];
+}
+
 export const DEFAULT_HOSTED_WEB_URL = 'https://fontainer-alpha.vercel.app';
 
 /**
@@ -140,6 +155,11 @@ export async function deactivateOsFont(fontId: string): Promise<OsDeactivationRe
 export async function openOsFontsFolder(): Promise<string | null> {
   if (!isTauriDesktop()) return null;
   return invoke<string>('open_os_fonts_folder');
+}
+
+export async function scanSystemFontsNative(): Promise<NativeScannedSystemFont[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<NativeScannedSystemFont[]>('scan_system_fonts');
 }
 
 export async function startDesktopAuthSession(

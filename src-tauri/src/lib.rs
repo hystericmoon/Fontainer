@@ -14,6 +14,7 @@ pub fn run() {
             font_activator::activate_cached_font,
             font_activator::deactivate_os_font,
             font_activator::open_os_fonts_folder,
+            font_activator::scan_system_fonts,
             desktop_auth::start_desktop_auth_session,
         ])
         .run(tauri::generate_context!())

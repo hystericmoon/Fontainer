@@ -501,10 +501,10 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
               <div className="flex items-start gap-2.5 min-w-0 flex-1">
                 <Laptop className="w-4 h-4 mt-0.5 shrink-0" />
                 <div className="min-w-0">
-                  <h3 className="font-semibold text-[13px]">Scan Installed Mac / OS Fonts</h3>
+                  <h3 className="font-semibold text-[13px]">Scan Installed Mac / Windows Fonts</h3>
                   <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
-                    Reads your actual installed system fonts via the browser’s Local Font Access API
-                    (Chrome, Edge, Brave, Arc on desktop).
+                    Reads your actual installed system fonts directly in the desktop app, or via
+                    Chrome, Edge, Brave, and Arc on the web.
                   </p>
                 </div>
               </div>

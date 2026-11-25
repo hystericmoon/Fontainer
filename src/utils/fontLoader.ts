@@ -1,4 +1,5 @@
 import opentype from 'opentype.js';
+import { isTauriDesktop, scanSystemFontsNative } from '../services/desktopFontActivator';
 import type { FontClassification, FontFamily, FontFormat, FontStyleVariant } from '../types/font';
 
 const DB_NAME = 'fontainer-font-store';
@@ -337,8 +338,53 @@ export async function importLocalFontFile(
   });
 }
 
-/** Real Local Font Access API (macOS / Windows Chrome & Edge) */
+/** Real System Fonts Scan: Native Rust OS scan inside Tauri desktop, or Local Font Access API on Chromium web */
 export async function scanSystemLocalFonts(targetLibraryId: string): Promise<FontFamily[]> {
+  if (isTauriDesktop()) {
+    const nativeFonts = await scanSystemFontsNative();
+    const now = new Date().toISOString();
+    return nativeFonts.map((nf) => {
+      const slug = `sys-${nf.family.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+      const classification = inferClassificationFromName(nf.family, false);
+      const format: FontFormat = nf.format === 'OTF' ? 'OTF' : 'TTF';
+      return {
+        id: slug,
+        name: nf.family,
+        cssFamily: `'${nf.family}', ${classification === 'Serif' ? 'serif' : classification === 'Monospace' ? 'monospace' : 'sans-serif'}`,
+        foundry: 'Installed System Font',
+        designer: 'OS System Font Catalog',
+        classification,
+        format,
+        width: /condensed|narrow/i.test(nf.family)
+          ? 'Condensed'
+          : /expanded|wide/i.test(nf.family)
+            ? 'Expanded'
+            : 'Normal',
+        isVariable: false,
+        license: 'Installed OS / Local License',
+        version: 'System',
+        languages: ['Latin'],
+        openTypeFeatures: ['liga', 'kern'],
+        libraryId: targetLibraryId,
+        addedAt: now,
+        starred: false,
+        activated: true,
+        tags: ['system'],
+        sourcePath: nf.sourcePath,
+        notes: `Detected directly from OS Fonts (${nf.styles.length} installed ${nf.styles.length === 1 ? 'face' : 'faces'}).`,
+        styles: nf.styles.map((s, idx) => ({
+          id: `${slug}-${idx}`,
+          name: s.name || 'Regular',
+          weight: s.weight || 400,
+          italic: Boolean(s.italic),
+          postScriptName: s.postScriptName || `${nf.family.replace(/\s+/g, '')}-${s.name}`,
+          activated: true,
+          fileSizeKb: s.fileSizeKb || 0,
+        })),
+      };
+    });
+  }
+
   const win = window as unknown as {
     queryLocalFonts?: () => Promise<
       Array<{
@@ -437,7 +483,53 @@ export async function scanSystemLocalFonts(targetLibraryId: string): Promise<Fon
   return families.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** Real File System Access API folder scanner (works with iCloud Drive, Box Drive, ~/Library/Fonts) */
+function pickFolderViaFileInput(): Promise<{ folderName: string; files: Array<{ file: File; relPath: string }> }> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.setAttribute('webkitdirectory', '');
+    input.setAttribute('directory', '');
+    input.style.display = 'none';
+
+    let settled = false;
+    const cleanup = () => {
+      if (input.parentNode) input.parentNode.removeChild(input);
+    };
+
+    input.onchange = () => {
+      if (settled) return;
+      settled = true;
+      const list = Array.from(input.files ?? []);
+      cleanup();
+      if (list.length === 0) {
+        reject(new DOMException('Folder selection cancelled', 'AbortError'));
+        return;
+      }
+      const firstRel = (list[0] as File & { webkitRelativePath?: string }).webkitRelativePath || '';
+      const folderName = firstRel.split('/')[0] || 'Selected Folder';
+      const matching = list
+        .filter((f) => FONT_FILE_RE.test(f.name))
+        .map((file) => ({
+          file,
+          relPath: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
+        }));
+      resolve({ folderName, files: matching });
+    };
+
+    input.oncancel = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException('Folder selection cancelled', 'AbortError'));
+    };
+
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/** Real Folder scanner: uses File System Access API on Chromium, or native webkitdirectory picker on macOS Tauri / Safari / Firefox */
 export async function scanLocalDirectoryFonts(
   targetLibraryId: string,
   sourceLabel: string,
@@ -447,30 +539,33 @@ export async function scanLocalDirectoryFonts(
     showDirectoryPicker?: (opts?: { mode?: 'read' }) => Promise<FileSystemDirectoryHandle>;
   };
 
-  if (typeof win.showDirectoryPicker !== 'function') {
-    throw new Error(
-      'Direct folder scanning requires Chrome, Edge, Brave, or Arc. You can still drag-and-drop font files or click + Import.',
-    );
-  }
-
-  const dirHandle = await win.showDirectoryPicker({ mode: 'read' });
+  let folderName = 'Local Folder';
   const collected: Array<{ file: File; relPath: string }> = [];
 
-  async function walk(handle: FileSystemDirectoryHandle, prefix: string) {
-    if (collected.length >= maxFiles) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for await (const [name, entry] of (handle as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
-      if (collected.length >= maxFiles) break;
-      if (entry.kind === 'file' && FONT_FILE_RE.test(name)) {
-        const file = await (entry as FileSystemFileHandle).getFile();
-        collected.push({ file, relPath: prefix ? `${prefix}/${name}` : name });
-      } else if (entry.kind === 'directory' && !name.startsWith('.')) {
-        await walk(entry as FileSystemDirectoryHandle, prefix ? `${prefix}/${name}` : name);
+  if (typeof win.showDirectoryPicker === 'function') {
+    const dirHandle = await win.showDirectoryPicker({ mode: 'read' });
+    folderName = dirHandle.name;
+
+    async function walk(handle: FileSystemDirectoryHandle, prefix: string) {
+      if (collected.length >= maxFiles) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for await (const [name, entry] of (handle as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
+        if (collected.length >= maxFiles) break;
+        if (entry.kind === 'file' && FONT_FILE_RE.test(name)) {
+          const file = await (entry as FileSystemFileHandle).getFile();
+          collected.push({ file, relPath: prefix ? `${prefix}/${name}` : name });
+        } else if (entry.kind === 'directory' && !name.startsWith('.')) {
+          await walk(entry as FileSystemDirectoryHandle, prefix ? `${prefix}/${name}` : name);
+        }
       }
     }
-  }
 
-  await walk(dirHandle, dirHandle.name);
+    await walk(dirHandle, dirHandle.name);
+  } else {
+    const picked = await pickFolderViaFileInput();
+    folderName = picked.folderName;
+    collected.push(...picked.files.slice(0, maxFiles));
+  }
 
   const fonts: FontFamily[] = [];
   for (const item of collected) {
@@ -487,5 +582,5 @@ export async function scanLocalDirectoryFonts(
     }
   }
 
-  return { folderName: dirHandle.name, fonts };
+  return { folderName, fonts };
 }

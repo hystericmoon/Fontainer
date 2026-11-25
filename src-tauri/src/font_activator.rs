@@ -76,6 +76,25 @@ pub struct DeactivationResult {
     pub removed_files: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedSystemStyle {
+    pub name: String,
+    pub weight: u16,
+    pub italic: bool,
+    pub post_script_name: String,
+    pub file_size_kb: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedSystemFont {
+    pub family: String,
+    pub format: String,
+    pub source_path: String,
+    pub styles: Vec<ScannedSystemStyle>,
+}
+
 /// Returns the current OS platform label.
 pub fn current_platform() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -950,6 +969,212 @@ pub fn open_os_fonts_folder() -> Result<String, String> {
         .map_err(|e| format!("Failed to prepare OS fonts folder {}: {e}", dir.display()))?;
     open::that(&dir).map_err(|e| format!("Failed to open OS fonts folder: {e}"))?;
     Ok(dir.to_string_lossy().to_string())
+}
+
+fn system_font_scan_dirs() -> Vec<PathBuf> {
+    let mut dirs_to_scan = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            dirs_to_scan.push(home.join("Library").join("Fonts"));
+        }
+        dirs_to_scan.push(PathBuf::from("/Library/Fonts"));
+        dirs_to_scan.push(PathBuf::from("/System/Library/Fonts/Supplemental"));
+        dirs_to_scan.push(PathBuf::from("/System/Library/Fonts"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            dirs_to_scan.push(local.join("Microsoft").join("Windows").join("Fonts"));
+        }
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+        dirs_to_scan.push(PathBuf::from(windir).join("Fonts"));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            dirs_to_scan.push(home.join(".local").join("share").join("fonts"));
+        }
+        dirs_to_scan.push(PathBuf::from("/usr/share/fonts"));
+    }
+    dirs_to_scan
+}
+
+fn parse_filename_family_and_style(stem: &str) -> (String, String, u16, bool) {
+    let cleaned = stem.replace('_', " ");
+    let parts: Vec<&str> = cleaned.splitn(2, '-').collect();
+    let raw_family = parts[0].trim();
+    let raw_style = if parts.len() > 1 { parts[1].trim() } else { "" };
+
+    let lower = cleaned.to_ascii_lowercase();
+    let italic = lower.contains("italic") || lower.contains("oblique");
+    let weight = if lower.contains("thin") || lower.contains("hairline") {
+        100
+    } else if lower.contains("extralight") || lower.contains("ultralight") {
+        200
+    } else if lower.contains("light") {
+        300
+    } else if lower.contains("medium") {
+        500
+    } else if lower.contains("semibold") || lower.contains("demibold") || lower.contains("demi") {
+        600
+    } else if lower.contains("extrabold") || lower.contains("ultrabold") || lower.contains("heavy") {
+        800
+    } else if lower.contains("black") {
+        900
+    } else if lower.contains("bold") {
+        700
+    } else {
+        400
+    };
+
+    // Insert spaces in CamelCase names like "HelveticaNeue" -> "Helvetica Neue"
+    let mut spaced = String::with_capacity(raw_family.len() + 6);
+    let chars: Vec<char> = raw_family.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if i > 0
+            && c.is_uppercase()
+            && chars[i - 1].is_lowercase()
+            && !spaced.ends_with(' ')
+        {
+            spaced.push(' ');
+        }
+        spaced.push(c);
+    }
+
+    let family = spaced
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let final_family = if family.is_empty() {
+        stem.to_string()
+    } else {
+        family
+    };
+
+    let style_name = if !raw_style.is_empty() {
+        raw_style.to_string()
+    } else {
+        let base_w = match weight {
+            100 => "Thin",
+            200 => "ExtraLight",
+            300 => "Light",
+            500 => "Medium",
+            600 => "SemiBold",
+            700 => "Bold",
+            800 => "ExtraBold",
+            900 => "Black",
+            _ => "Regular",
+        };
+        if italic {
+            if weight == 400 {
+                "Italic".to_string()
+            } else {
+                format!("{base_w} Italic")
+            }
+        } else {
+            base_w.to_string()
+        }
+    };
+
+    (final_family, style_name, weight, italic)
+}
+
+fn walk_font_dir(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 3 || out.len() >= 1500 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= 1500 {
+            break;
+        }
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || name.starts_with("Fontainer_") {
+            continue;
+        }
+        if path.is_dir() {
+            walk_font_dir(&path, depth + 1, out);
+        } else if path.is_file() {
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc") {
+                out.push(path);
+            }
+        }
+    }
+}
+
+/// Natively scans installed macOS / Windows / Linux system fonts without requiring Chromium's Local Font Access API.
+#[tauri::command]
+pub fn scan_system_fonts() -> Result<Vec<ScannedSystemFont>, String> {
+    let mut file_paths = Vec::new();
+    for dir in system_font_scan_dirs() {
+        if dir.exists() {
+            walk_font_dir(&dir, 0, &mut file_paths);
+        }
+    }
+
+    let mut grouped: HashMap<String, ScannedSystemFont> = HashMap::new();
+
+    for path in file_paths {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("ttf")
+            .to_ascii_uppercase();
+        let format = if ext == "OTF" { "OTF" } else { "TTF" }.to_string();
+        let size_kb = fs::metadata(&path)
+            .map(|m| (m.len() / 1024).max(1))
+            .unwrap_or(0);
+
+        let (family, style_name, weight, italic) = parse_filename_family_and_style(stem);
+        let key = family.to_ascii_lowercase();
+        let ps_name = format!(
+            "{}-{}",
+            family.replace(' ', ""),
+            style_name.replace(' ', "")
+        );
+
+        let entry = grouped.entry(key).or_insert_with(|| ScannedSystemFont {
+            family: family.clone(),
+            format: format.clone(),
+            source_path: path.to_string_lossy().to_string(),
+            styles: Vec::new(),
+        });
+
+        let already_has_style = entry
+            .styles
+            .iter()
+            .any(|s| s.weight == weight && s.italic == italic && s.name.eq_ignore_ascii_case(&style_name));
+        if !already_has_style {
+            entry.styles.push(ScannedSystemStyle {
+                name: style_name,
+                weight,
+                italic,
+                post_script_name: ps_name,
+                file_size_kb: size_kb,
+            });
+        }
+    }
+
+    let mut result: Vec<ScannedSystemFont> = grouped
+        .into_values()
+        .map(|mut f| {
+            f.styles.sort_by(|a, b| a.weight.cmp(&b.weight).then(a.italic.cmp(&b.italic)));
+            f
+        })
+        .collect();
+    result.sort_by(|a, b| a.family.to_ascii_lowercase().cmp(&b.family.to_ascii_lowercase()));
+
+    Ok(result)
 }
 
 #[cfg(test)]
