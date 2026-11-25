@@ -11,6 +11,7 @@ import {
   DriveAuthExpiredError,
   fetchAdobeFontsKit,
   fetchGoogleDriveFileMetadata,
+  fetchLiveFontshareFonts,
   fetchLiveGoogleFonts,
   groupDriveFilesIntoFamilies,
   listGoogleDriveFonts,
@@ -19,6 +20,7 @@ import {
 import {
   activateCachedFontInOs,
   activateFontBinaryInOs,
+  activateFontshareFontInOs,
   activateGoogleFontInOs,
   activateLocalDriveFolderZeroCopy,
   batchActivateDriveFonts,
@@ -28,8 +30,12 @@ import {
   extractDriveFileId,
   getOsFontStatus,
   isTauriDesktop,
+  listWatchedFolders,
   openOsFontsFolder,
+  setSessionOnlyMode,
   subscribeBatchProgress,
+  unwatchLocalFolder,
+  watchLocalFolder,
   type DetectedLocalDriveFolder,
   type DriveBatchFontItem,
 } from '../services/desktopFontActivator';
@@ -121,10 +127,12 @@ function loadLocalState(): LocalPersistedState {
       ? parsed.libraries
       : INITIAL_LIBRARIES;
     const hasGoogle = libs.some((l) => l.id === 'lib-google');
+    const hasFontshare = libs.some((l) => l.id === 'lib-fontshare');
     const hasLocal = libs.some((l) => l.id === 'lib-local');
     const mergedLibs = [
       ...(hasGoogle ? [] : [INITIAL_LIBRARIES[0]]),
-      ...(hasLocal ? [] : [INITIAL_LIBRARIES[1]]),
+      ...(hasFontshare ? [] : [INITIAL_LIBRARIES[1]]),
+      ...(hasLocal ? [] : [INITIAL_LIBRARIES[2]]),
       ...libs,
     ];
     return {
@@ -173,6 +181,8 @@ export function useFontainerStore() {
   const [pendingDriveSyncIds, setPendingDriveSyncIds] = useState<string[]>([]);
   const [osSyncNonce, setOsSyncNonce] = useState(0);
   const [localDriveFolders, setLocalDriveFolders] = useState<DetectedLocalDriveFolder[]>([]);
+  const [watchedFolders, setWatchedFolders] = useState<string[]>([]);
+  const [sessionOnlyMode, setSessionOnlyModeState] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{
     label: string;
     completed: number;
@@ -185,6 +195,8 @@ export function useFontainerStore() {
   const [googleLoading, setGoogleLoading] = useState(true);
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [googleTotal, setGoogleTotal] = useState(0);
+  const [fontshareFonts, setFontshareFonts] = useState<FontFamily[]>([]);
+  const [styleOverrides, setStyleOverrides] = useState<Record<string, Record<string, boolean>>>({});
   const [adobeFonts, setAdobeFonts] = useState<FontFamily[]>([]);
   const [customFonts, setCustomFonts] = useState<FontFamily[]>(initial.customFonts);
   const [adobeKits, setAdobeKits] = useState<AdobeKitRecord[]>(initial.adobeKits);
@@ -215,6 +227,8 @@ export function useFontainerStore() {
   fontMetaRef.current = fontMeta;
   const googleFontsRef = useRef<FontFamily[]>(googleFonts);
   googleFontsRef.current = googleFonts;
+  const fontshareFontsRef = useRef<FontFamily[]>(fontshareFonts);
+  fontshareFontsRef.current = fontshareFonts;
   const customFontsRef = useRef<FontFamily[]>(customFonts);
   customFontsRef.current = customFonts;
   const osActiveIdsRef = useRef<Set<string>>(new Set());
@@ -310,6 +324,33 @@ export function useFontainerStore() {
     void refreshGoogleFonts(true);
   }, [refreshGoogleFonts]);
 
+  // Load REAL Live Fontshare Directory (100+ free commercial designer fonts)
+  const refreshFontshareFonts = useCallback(
+    async (silent = false) => {
+      try {
+        const res = await fetchLiveFontshareFonts('lib-fontshare');
+        setFontshareFonts(res.fonts);
+        setLibraries((prev) =>
+          prev.map((l) =>
+            l.id === 'lib-fontshare' ? { ...l, syncedAt: new Date().toISOString() } : l,
+          ),
+        );
+        if (!silent) {
+          showToast(`Synced ${res.fonts.length} live Fontshare families`);
+        }
+      } catch (err) {
+        if (!silent) {
+          showToast(err instanceof Error ? err.message : 'Unable to reach Fontshare');
+        }
+      }
+    },
+    [showToast],
+  );
+
+  useEffect(() => {
+    void refreshFontshareFonts(true);
+  }, [refreshFontshareFonts]);
+
   // Hydrate any persisted Adobe Fonts Web Project kits live
   useEffect(() => {
     for (const kit of adobeKits) {
@@ -377,8 +418,12 @@ export function useFontainerStore() {
         onLibraries: (cloudLibs) => {
           if (cloudLibs.length === 0) return;
           setLibraries((prev) => {
-            const base = prev.filter((l) => l.id === 'lib-google' || l.id === 'lib-local');
-            const custom = cloudLibs.filter((l) => l.id !== 'lib-google' && l.id !== 'lib-local');
+            const base = prev.filter(
+              (l) => l.id === 'lib-google' || l.id === 'lib-fontshare' || l.id === 'lib-local',
+            );
+            const custom = cloudLibs.filter(
+              (l) => l.id !== 'lib-google' && l.id !== 'lib-fontshare' && l.id !== 'lib-local',
+            );
             return [...base, ...custom];
           });
         },
@@ -450,22 +495,29 @@ export function useFontainerStore() {
     compareIds,
   ]);
 
-  // Merge all real font sources + apply per-user metadata overrides (starred, activated, tags, notes)
+  // Merge all real font sources + apply per-user metadata & per-weight style overrides
   const fonts: FontFamily[] = useMemo(() => {
-    const combined = [...customFonts, ...adobeFonts, ...googleFonts];
+    const combined = [...customFonts, ...adobeFonts, ...fontshareFonts, ...googleFonts];
     return combined.map((font) => {
       const override = fontMeta[font.id];
-      if (!override) return font;
+      const perStyle = styleOverrides[font.id];
+      if (!override && !perStyle) return font;
+      const baseActivated = override ? override.activated : font.activated;
+      const styles = font.styles.map((s) => ({
+        ...s,
+        activated: perStyle && s.id in perStyle ? perStyle[s.id] : baseActivated,
+      }));
+      const anyStyleActive = styles.some((s) => s.activated);
       return {
         ...font,
-        starred: override.starred,
-        activated: override.activated,
-        tags: override.tags.length > 0 ? override.tags : font.tags,
-        notes: override.notes || font.notes,
-        styles: font.styles.map((s) => ({ ...s, activated: override.activated })),
+        starred: override ? override.starred : font.starred,
+        activated: perStyle ? anyStyleActive : baseActivated,
+        tags: override && override.tags.length > 0 ? override.tags : font.tags,
+        notes: override?.notes || font.notes,
+        styles,
       };
     });
-  }, [customFonts, adobeFonts, googleFonts, fontMeta]);
+  }, [customFonts, adobeFonts, fontshareFonts, googleFonts, fontMeta, styleOverrides]);
 
   // Auto-select first available font for the inspector
   useEffect(() => {
@@ -632,10 +684,32 @@ export function useFontainerStore() {
   );
 
   const toggleStyleActivation = useCallback(
-    (fontId: string, _styleId: string) => {
-      toggleFontActivation(fontId);
+    (fontId: string, styleId: string) => {
+      const target = fonts.find((f) => f.id === fontId);
+      if (!target) return;
+      const nextStyleMap: Record<string, boolean> = {};
+      for (const s of target.styles) {
+        nextStyleMap[s.id] = s.id === styleId ? !s.activated : s.activated;
+      }
+      setStyleOverrides((prev) => ({ ...prev, [fontId]: nextStyleMap }));
+      const anyActive = Object.values(nextStyleMap).some(Boolean);
+      const toggledStyle = target.styles.find((s) => s.id === styleId);
+      showToast(
+        `${nextStyleMap[styleId] ? 'Activated' : 'Deactivated'} ${target.name} ${toggledStyle?.name ?? ''}`.trim(),
+      );
+      if (anyActive !== target.activated) {
+        updateFontUserMeta(fontId, (cur) => ({ ...cur, activated: anyActive }));
+      } else if (isDesktop && target.id.startsWith('gf-') && anyActive) {
+        // Re-sync selected Google Font weights to OS
+        const activeStyles = target.styles
+          .filter((s) => nextStyleMap[s.id])
+          .map((s) => ({ weight: s.weight, italic: s.italic }));
+        void deactivateOsFont(fontId)
+          .then(() => activateGoogleFontInOs(fontId, target.name, activeStyles))
+          .catch(() => {});
+      }
     },
-    [toggleFontActivation],
+    [fonts, isDesktop, showToast, updateFontUserMeta],
   );
 
   const batchSetActivation = useCallback(
@@ -1342,6 +1416,10 @@ export function useFontainerStore() {
         void refreshGoogleFonts(false);
         return;
       }
+      if (libraryId === 'lib-fontshare') {
+        void refreshFontshareFonts(false);
+        return;
+      }
       const lib = libraries.find((l) => l.id === libraryId);
       if (lib?.provider === 'adobe' && lib.remoteId) {
         void connectAdobeKit(lib.remoteId, lib.name).catch((err) => {
@@ -1456,6 +1534,22 @@ export function useFontainerStore() {
     setPreview((prev) => ({ ...prev, openType: { ...prev.openType, ...patch } }));
   }, []);
 
+  const updateVariableAxes = useCallback(
+    (patch: Partial<NonNullable<PreviewSettings['variableAxes']>>) => {
+      setPreview((prev) => ({
+        ...prev,
+        variableAxes: {
+          wght: prev.variableAxes?.wght ?? 400,
+          wdth: prev.variableAxes?.wdth ?? 100,
+          slnt: prev.variableAxes?.slnt ?? 0,
+          opsz: prev.variableAxes?.opsz ?? 14,
+          ...patch,
+        },
+      }));
+    },
+    [],
+  );
+
   const updateFilters = useCallback((patch: Partial<FilterState>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
   }, []);
@@ -1502,6 +1596,52 @@ export function useFontainerStore() {
     setOsSyncNonce((n) => n + 1);
   }, []);
 
+  const toggleSessionOnlyMode = useCallback(async () => {
+    if (!isDesktop) return;
+    const next = !sessionOnlyMode;
+    try {
+      const confirmed = await setSessionOnlyMode(next);
+      setSessionOnlyModeState(confirmed);
+      showToast(
+        confirmed
+          ? 'Session-Only Mode ON — newly activated fonts auto-deactivate when you quit'
+          : 'Session-Only Mode OFF — activated fonts stay installed across restarts',
+      );
+    } catch {
+      showToast('Unable to toggle Session-Only Mode');
+    }
+  }, [isDesktop, sessionOnlyMode, showToast]);
+
+  const addWatchedFolder = useCallback(
+    async (folderPath: string) => {
+      if (!isDesktop) return 0;
+      const res = await watchLocalFolder(folderPath);
+      const updated = await listWatchedFolders();
+      setWatchedFolders(updated);
+      if (res) {
+        const status = await getOsFontStatus();
+        if (status) {
+          osActiveIdsRef.current = new Set(status.activeFontIds);
+          setOsActiveCount(status.activeFontIds.length);
+        }
+        showToast(`Watching folder — ${res.activatedCount} fonts auto-activated in-place`);
+        return res.fonts.length;
+      }
+      return 0;
+    },
+    [isDesktop, showToast],
+  );
+
+  const removeWatchedFolder = useCallback(
+    async (folderPath: string) => {
+      if (!isDesktop) return;
+      const updated = await unwatchLocalFolder(folderPath);
+      setWatchedFolders(updated);
+      showToast('Stopped watching folder');
+    },
+    [isDesktop, showToast],
+  );
+
   // Load current OS font activator status + detect local Google Drive Desktop folders + subscribe to batch progress
   useEffect(() => {
     if (!isDesktop) return;
@@ -1513,6 +1653,7 @@ export function useFontainerStore() {
         if (!mounted || !status) return;
         setOsPlatform(status.platform);
         setOsFontsDir(status.fontsDir);
+        setSessionOnlyModeState(Boolean(status.sessionOnly));
         osActiveIdsRef.current = new Set(status.activeFontIds);
         setOsActiveCount(status.activeFontIds.length);
         setOsReady(true);
@@ -1524,6 +1665,12 @@ export function useFontainerStore() {
     void detectLocalGoogleDriveFolders()
       .then((folders) => {
         if (mounted) setLocalDriveFolders(folders);
+      })
+      .catch(() => {});
+
+    void listWatchedFolders()
+      .then((folders) => {
+        if (mounted) setWatchedFolders(folders);
       })
       .catch(() => {});
 
@@ -1627,6 +1774,23 @@ export function useFontainerStore() {
                   gFont.name,
                   gFont.styles.map((s) => ({ weight: s.weight, italic: s.italic })),
                 );
+                if (res?.installed) {
+                  osActiveIdsRef.current.add(targetId);
+                  if (!res.alreadyActive) totalActivated += 1;
+                }
+              } catch {
+                osSkippedIdsRef.current.add(targetId);
+              }
+              continue;
+            }
+
+            // A2) Fontshare Fonts -> Rust downloads official zip, extracts .otf/.ttf & registers with OS
+            if (targetId.startsWith('fs-')) {
+              const fsFont = fontshareFontsRef.current.find((f) => f.id === targetId);
+              const slug = fsFont?.fontshareSlug || targetId.slice(3);
+              const displayName = fsFont?.name || slug;
+              try {
+                const res = await activateFontshareFontInOs(targetId, slug, displayName);
                 if (res?.installed) {
                   osActiveIdsRef.current.add(targetId);
                   if (!res.alreadyActive) totalActivated += 1;
@@ -1814,9 +1978,14 @@ export function useFontainerStore() {
     osSyncBusy,
     pendingDriveSyncIds,
     localDriveFolders,
+    watchedFolders,
+    sessionOnlyMode,
     bulkProgress,
     openOsFontsFolder: handleOpenOsFontsFolder,
     triggerOsFontResync,
+    toggleSessionOnlyMode,
+    addWatchedFolder,
+    removeWatchedFolder,
     activateAllGoogleDriveFonts,
     activateLocalDriveZeroCopy,
     activateAllInLibrary,
@@ -1824,8 +1993,10 @@ export function useFontainerStore() {
     googleLoading,
     googleError,
     googleTotal,
+    fontshareTotal: fontshareFonts.length,
     adobeKits,
     refreshGoogleFonts,
+    refreshFontshareFonts,
     connectAdobeKit,
     removeAdobeKit,
     importGoogleDriveFiles,
@@ -1884,6 +2055,7 @@ export function useFontainerStore() {
     importLocalFonts,
     updatePreview,
     updateOpenType,
+    updateVariableAxes,
     resetAllData,
   };
 }

@@ -62,6 +62,8 @@ interface SidebarProps {
   osPlatform?: string | null;
   osActiveCount?: number;
   osSyncBusy?: boolean;
+  sessionOnlyMode?: boolean;
+  onToggleSessionOnlyMode?: () => void;
   onOpenOsFontsFolder?: () => void;
   user: User | null;
   cloudSynced: boolean;
@@ -101,6 +103,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   osPlatform = null,
   osActiveCount = 0,
   osSyncBusy = false,
+  sessionOnlyMode = false,
+  onToggleSessionOnlyMode,
   onOpenOsFontsFolder,
   user,
   cloudSynced,
@@ -149,6 +153,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     switch (provider) {
       case 'google':
         return <Globe className="w-3.5 h-3.5 shrink-0" />;
+      case 'fontshare':
+        return <Sparkles className="w-3.5 h-3.5 shrink-0" />;
       case 'adobe':
         return <Type className="w-3.5 h-3.5 shrink-0" />;
       case 'gdrive':
@@ -555,6 +561,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
             <span className="font-code tabular-nums text-[10.5px] text-emerald-700 dark:text-emerald-400 shrink-0">
               {osSyncBusy ? 'Syncing…' : `${osActiveCount} live`}
+            </span>
+          </button>
+        )}
+        {isDesktop && onToggleSessionOnlyMode && (
+          <button
+            type="button"
+            onClick={onToggleSessionOnlyMode}
+            title="When ON, newly activated fonts automatically deactivate when you quit Fontainer"
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] text-neutral-600 dark:text-neutral-300 hover:bg-black/[0.05] dark:hover:bg-white/[0.07] hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <Clock className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+              <span className="truncate">Session Mode</span>
+            </span>
+            <span
+              className={`font-code text-[10.5px] shrink-0 ${
+                sessionOnlyMode
+                  ? 'text-amber-600 dark:text-amber-400 font-medium'
+                  : 'text-neutral-400 dark:text-neutral-500'
+              }`}
+            >
+              {sessionOnlyMode ? 'Temp' : 'Perm'}
             </span>
           </button>
         )}

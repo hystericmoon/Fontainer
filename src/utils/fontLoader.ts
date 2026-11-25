@@ -8,6 +8,7 @@ const DB_VERSION = 1;
 
 const FONT_FILE_RE = /\.(ttf|otf|woff2?)$/i;
 const loadedGoogleFamilies = new Set<string>();
+const loadedFontshareSlugs = new Set<string>();
 const loadedAdobeKits = new Set<string>();
 const loadedCustomFontIds = new Set<string>();
 
@@ -144,6 +145,24 @@ export function ensureGoogleFontLoaded(familyName: string, styles?: FontStyleVar
   link.rel = 'stylesheet';
   link.href = `https://fonts.googleapis.com/css2?${query}&display=swap`;
   link.dataset.fontainerGfont = key;
+  document.head.appendChild(link);
+}
+
+/** Dynamically inject a real Fontshare CSS stylesheet on demand */
+export function ensureFontshareFontLoaded(slug: string, styles?: FontStyleVariant[]): void {
+  if (typeof document === 'undefined' || !slug) return;
+  const clean = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!clean || loadedFontshareSlugs.has(clean)) return;
+  loadedFontshareSlugs.add(clean);
+
+  const weights =
+    styles && styles.length > 0
+      ? Array.from(new Set(styles.map((s) => s.weight))).sort((a, b) => a - b)
+      : [400, 700];
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `https://api.fontshare.com/v2/css?f[]=${encodeURIComponent(clean)}@${weights.join(',')}&display=swap`;
+  link.dataset.fontainerFontshare = clean;
   document.head.appendChild(link);
 }
 

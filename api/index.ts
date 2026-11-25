@@ -31,6 +31,25 @@ interface CachedCatalog {
   items: GoogleFontCatalogItem[];
 }
 
+interface FontshareCatalogItem {
+  slug: string;
+  family: string;
+  category: string;
+  designer: string;
+  styles: Array<{ label: string; weight: number; italic: boolean }>;
+  isVariable: boolean;
+  axes: string[];
+  features: string[];
+  version: string;
+  addedAt: string;
+}
+
+interface CachedFontshareCatalog {
+  fetchedAt: number;
+  etag: string;
+  items: FontshareCatalogItem[];
+}
+
 interface ParsedAdobeKit {
   kitId: string;
   cssUrl: string;
@@ -61,6 +80,9 @@ class UpstreamHttpError extends Error {
 
 let googleCatalogCache: CachedCatalog | null = null;
 let googleCatalogInFlight: Promise<CachedCatalog> | null = null;
+
+let fontshareCatalogCache: CachedFontshareCatalog | null = null;
+let fontshareCatalogInFlight: Promise<CachedFontshareCatalog> | null = null;
 
 const adobeKitCache = new Map<string, CachedAdobeKit>();
 const adobeKitInFlight = new Map<string, Promise<ParsedAdobeKit>>();
@@ -286,6 +308,100 @@ export async function fetchLiveGoogleFontsCatalog(): Promise<CachedCatalog> {
     });
 
   return googleCatalogInFlight;
+}
+
+async function fetchLiveFontshareCatalog(): Promise<CachedFontshareCatalog> {
+  if (fontshareCatalogCache && Date.now() - fontshareCatalogCache.fetchedAt < GOOGLE_CACHE_TTL_MS) {
+    return fontshareCatalogCache;
+  }
+  if (fontshareCatalogInFlight) {
+    return fontshareCatalogInFlight;
+  }
+
+  fontshareCatalogInFlight = (async () => {
+    const resp = await fetch('https://api.fontshare.com/v2/fonts?limit=200', {
+      signal: AbortSignal.timeout(12000),
+      headers: { Accept: 'application/json', 'User-Agent': 'Fontainer/1.0' },
+    });
+    if (!resp.ok) {
+      throw new Error(`Fontshare directory unavailable (${resp.status})`);
+    }
+    const json = (await resp.json()) as {
+      fonts?: Array<{
+        slug?: string;
+        name?: string;
+        category?: string;
+        version?: string;
+        inserted_at?: string;
+        designers?: Array<{ name?: string }>;
+        publisher?: { name?: string };
+        axes?: Array<{ tag?: string }>;
+        features?: Array<{ tag?: string }>;
+        styles?: Array<{
+          is_variable?: boolean;
+          is_italic?: boolean;
+          weight?: { label?: string; name?: string; number?: number; weight?: number };
+        }>;
+      }>;
+    };
+
+    const items: FontshareCatalogItem[] = (json.fonts ?? [])
+      .filter((f) => f.slug && f.name)
+      .map((f) => {
+        const designerNames = (f.designers ?? [])
+          .map((d) => d.name?.trim())
+          .filter((n): n is string => Boolean(n));
+        const designer =
+          designerNames.length > 0
+            ? designerNames.join(', ')
+            : f.publisher?.name || 'Indian Type Foundry';
+        const rawStyles = (f.styles ?? []).filter((s) => !s.is_variable);
+        const styles =
+          rawStyles.length > 0
+            ? rawStyles.map((s) => ({
+                label: s.weight?.label || s.weight?.name || 'Regular',
+                weight: Math.min(900, Math.max(100, Number(s.weight?.number ?? s.weight?.weight ?? 400))),
+                italic: Boolean(s.is_italic),
+              }))
+            : [{ label: 'Regular', weight: 400, italic: false }];
+        const axes = (f.axes ?? []).map((a) => a.tag || '').filter(Boolean);
+        const isVariable =
+          axes.length > 0 || (f.styles ?? []).some((s) => Boolean(s.is_variable));
+        const features = Array.from(
+          new Set((f.features ?? []).map((ft) => ft.tag || '').filter(Boolean)),
+        ).slice(0, 12);
+
+        return {
+          slug: String(f.slug),
+          family: String(f.name),
+          category: f.category || 'Sans',
+          designer,
+          styles,
+          isVariable,
+          axes,
+          features: features.length > 0 ? features : ['liga', 'kern'],
+          version: f.version || '1.0',
+          addedAt: f.inserted_at || new Date().toISOString(),
+        };
+      });
+
+    const fresh: CachedFontshareCatalog = {
+      fetchedAt: Date.now(),
+      etag: buildEtag(`fs:${items.length}:${items[0]?.slug ?? ''}`),
+      items,
+    };
+    fontshareCatalogCache = fresh;
+    return fresh;
+  })()
+    .catch((err) => {
+      if (fontshareCatalogCache) return fontshareCatalogCache;
+      throw err;
+    })
+    .finally(() => {
+      fontshareCatalogInFlight = null;
+    });
+
+  return fontshareCatalogInFlight;
 }
 
 function parseAdobeTypekitCss(cssText: string, kitId: string): ParsedAdobeKit {
@@ -519,6 +635,28 @@ export function createApiApp(options: CreateApiAppOptions = {}): Express {
     } catch (err) {
       res.status(502).json({
         error: err instanceof Error ? err.message : 'Failed to load live Google Fonts directory',
+      });
+    }
+  });
+
+  // 1b. Live Fontshare Directory Proxy (100+ free commercial designer fonts by ITF)
+  app.get('/api/fontshare-fonts', catalogLimiter, async (req, res) => {
+    try {
+      const catalog = await fetchLiveFontshareCatalog();
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400');
+      res.setHeader('ETag', catalog.etag);
+      if (req.headers['if-none-match'] === catalog.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json({
+        source: 'fontshare-v2',
+        total: catalog.items.length,
+        items: catalog.items,
+      });
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to load Fontshare catalog',
       });
     }
   });

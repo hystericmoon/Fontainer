@@ -15,6 +15,7 @@ import { buildOpenTypeFeatureSettings, generateFontCssSnippet } from '../utils/f
 import {
   ensureAdobeKitStylesheet,
   ensureCustomFontLoaded,
+  ensureFontshareFontLoaded,
   ensureGoogleFontLoaded,
 } from '../utils/fontLoader';
 
@@ -66,6 +67,8 @@ export const FontRow: React.FC<FontRowProps> = ({
     const loadFace = () => {
       if (font.adobeKitId) {
         ensureAdobeKitStylesheet(font.adobeKitId);
+      } else if (font.fontshareSlug) {
+        ensureFontshareFontLoaded(font.fontshareSlug, font.styles);
       } else if (font.isCustomUpload) {
         void ensureCustomFontLoaded(font.id, font.name);
       } else if (font.libraryId === 'lib-google') {
@@ -95,6 +98,11 @@ export const FontRow: React.FC<FontRowProps> = ({
   const specimenText = preview.text.trim() || font.name;
   const activeStylesCount = font.styles.filter((s) => s.activated).length;
 
+  const variationSettings =
+    font.isVariable && preview.variableAxes
+      ? `"wght" ${preview.variableAxes.wght}, "wdth" ${preview.variableAxes.wdth}, "slnt" ${preview.variableAxes.slnt}, "opsz" ${preview.variableAxes.opsz}`
+      : undefined;
+
   const specimenStyle: React.CSSProperties = {
     fontFamily: font.cssFamily,
     fontSize: `${preview.fontSize}px`,
@@ -103,6 +111,7 @@ export const FontRow: React.FC<FontRowProps> = ({
     textTransform: preview.textCase === 'none' ? undefined : preview.textCase,
     textAlign: preview.textAlign,
     fontFeatureSettings: featureSettings,
+    fontVariationSettings: variationSettings,
     color: preview.foregroundColor || undefined,
   };
 

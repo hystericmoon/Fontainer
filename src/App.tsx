@@ -34,6 +34,7 @@ import { Toolbar } from './components/Toolbar';
 import { WaterfallView } from './components/WaterfallView';
 import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
+import { subscribeDesktopEvents } from './services/desktopFontActivator';
 import { countActiveFilterFacets } from './utils/fontFilter';
 
 type ActiveModal =
@@ -196,6 +197,25 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Listen to native macOS Menu Bar / Windows System Tray events & watched-folder auto-activations
+  useEffect(() => {
+    if (!store.isDesktop) return;
+    let unsub: (() => void) | null = null;
+    void subscribeDesktopEvents({
+      onOpenQuickSwitcher: () => setActiveModal('quick-switcher'),
+      onWatchedFolderUpdated: (count) => {
+        store.showToast(
+          `Auto-activated ${count} new ${count === 1 ? 'font' : 'fonts'} from watched folder`,
+        );
+      },
+    }).then((fn) => {
+      unsub = fn;
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [store.isDesktop, store.showToast]);
+
   const libraryMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const lib of store.libraries) map[lib.id] = lib.name;
@@ -281,6 +301,8 @@ export default function App() {
             osPlatform={store.osPlatform}
             osActiveCount={store.osActiveCount}
             osSyncBusy={store.osSyncBusy}
+            sessionOnlyMode={store.sessionOnlyMode}
+            onToggleSessionOnlyMode={() => void store.toggleSessionOnlyMode()}
             onOpenOsFontsFolder={() => void store.openOsFontsFolder()}
             user={store.user}
             cloudSynced={store.cloudSynced}
@@ -650,6 +672,7 @@ export default function App() {
                 theme={store.theme}
                 onUpdatePreview={store.updatePreview}
                 onUpdateOpenType={store.updateOpenType}
+                onUpdateVariableAxes={store.updateVariableAxes}
                 onToggleActivate={store.toggleFontActivation}
                 onSelectFont={store.setSelectedFontId}
                 onComparePair={store.compareFontPair}
@@ -682,16 +705,22 @@ export default function App() {
           hasDriveToken={store.hasDriveToken}
           googleTotal={store.googleTotal}
           googleLoading={store.googleLoading}
+          fontshareTotal={store.fontshareTotal}
           adobeKits={store.adobeKits}
           onSignInGoogle={() => store.signInWithGoogle(true)}
           onDriveTokenExpired={store.invalidateDriveToken}
           onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
+          onRefreshFontshareFonts={() => store.refreshFontshareFonts(false)}
           onConnectAdobeKit={store.connectAdobeKit}
           onRemoveAdobeKit={store.removeAdobeKit}
           onImportGoogleDriveFiles={store.importGoogleDriveFiles}
           onActivateAllGoogleDrive={store.activateAllGoogleDriveFonts}
           localDriveFolders={store.localDriveFolders}
           onActivateLocalDriveZeroCopy={store.activateLocalDriveZeroCopy}
+          isDesktop={store.isDesktop}
+          watchedFolders={store.watchedFolders}
+          onAddWatchedFolder={store.addWatchedFolder}
+          onRemoveWatchedFolder={store.removeWatchedFolder}
           onScanSystemFonts={store.scanSystemFonts}
           onConnectLocalFolder={store.connectLocalFolder}
           onOpenFileUpload={() => setActiveModal('import')}

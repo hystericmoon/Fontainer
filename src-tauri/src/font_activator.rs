@@ -2,8 +2,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
@@ -11,12 +12,14 @@ use tokio::sync::Semaphore;
 /// Serializes manifest reads/writes and OS font operations across concurrent IPC calls.
 pub struct FontActivatorState {
     pub lock: Mutex<()>,
+    pub session_only: AtomicBool,
 }
 
 impl Default for FontActivatorState {
     fn default() -> Self {
         Self {
             lock: Mutex::new(()),
+            session_only: AtomicBool::new(false),
         }
     }
 }
@@ -44,6 +47,8 @@ pub struct ManifestFontEntry {
     pub font_id: String,
     pub display_name: String,
     pub source: String,
+    #[serde(default)]
+    pub temporary: bool,
     pub files: Vec<InstalledFontFile>,
 }
 
@@ -61,6 +66,8 @@ pub struct OsFontStatus {
     pub fonts_dir: String,
     pub active_font_ids: Vec<String>,
     pub active_file_count: usize,
+    pub session_only: bool,
+    pub temporary_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -688,13 +695,61 @@ pub fn get_os_font_status(
     let mut active_font_ids: Vec<String> = manifest.entries.keys().cloned().collect();
     active_font_ids.sort();
     let active_file_count = manifest.entries.values().map(|e| e.files.len()).sum();
+    let temporary_count = manifest.entries.values().filter(|e| e.temporary).count();
 
     Ok(OsFontStatus {
         platform: current_platform().to_string(),
         fonts_dir: fonts_dir.to_string_lossy().to_string(),
         active_font_ids,
         active_file_count,
+        session_only: state.session_only.load(Ordering::Relaxed),
+        temporary_count,
     })
+}
+
+#[tauri::command]
+pub fn set_session_only_mode(
+    state: tauri::State<'_, FontActivatorState>,
+    enabled: bool,
+) -> bool {
+    state.session_only.store(enabled, Ordering::Relaxed);
+    enabled
+}
+
+/// Called automatically on app exit: unregisters & removes all temporary session-only fonts.
+pub fn cleanup_temporary_fonts(app: &AppHandle) {
+    let Ok(manifest_path) = resolve_manifest_path(app) else {
+        return;
+    };
+    let Some(state) = app.try_state::<FontActivatorState>() else {
+        return;
+    };
+    let Ok(_guard) = state.lock.lock() else {
+        return;
+    };
+    let mut manifest = load_manifest(&manifest_path);
+    let temp_ids: Vec<String> = manifest
+        .entries
+        .iter()
+        .filter(|(_, e)| e.temporary)
+        .map(|(k, _)| k.clone())
+        .collect();
+    if temp_ids.is_empty() {
+        return;
+    }
+    for id in temp_ids {
+        if let Some(entry) = manifest.entries.remove(&id) {
+            for file in &entry.files {
+                let path = Path::new(&file.installed_path);
+                platform_os::unregister_font(path, file.registry_name.as_deref());
+                if !file.external_in_place && path.exists() {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+    platform_os::broadcast_font_change();
+    let _ = save_manifest(&manifest_path, &manifest);
 }
 
 #[tauri::command]
@@ -822,6 +877,7 @@ pub async fn activate_google_font(
             font_id: font_id.clone(),
             display_name: family_name,
             source: "google".to_string(),
+            temporary: state.session_only.load(Ordering::Relaxed),
             files: installed.clone(),
         },
     );
@@ -895,6 +951,7 @@ pub fn activate_font_binary(
             } else {
                 "local".to_string()
             },
+            temporary: state.session_only.load(Ordering::Relaxed),
             files: installed.clone(),
         },
     );
@@ -961,6 +1018,7 @@ pub fn activate_cached_font(
             } else {
                 "local".to_string()
             },
+            temporary: state.session_only.load(Ordering::Relaxed),
             files: installed.clone(),
         },
     );
@@ -1412,6 +1470,7 @@ pub async fn batch_activate_drive_fonts(
                 font_id: item.font_id,
                 display_name: item.display_name,
                 source: "gdrive".to_string(),
+                temporary: false,
                 files: vec![InstalledFontFile {
                     file_name: installed_file_name,
                     installed_path: dest_path.to_string_lossy().to_string(),
@@ -1593,6 +1652,7 @@ pub fn activate_local_drive_folder_zero_copy(
             font_id,
             display_name: family.clone(),
             source: "local-zero-copy".to_string(),
+            temporary: false,
             files: vec![InstalledFontFile {
                 file_name: file_name.to_string(),
                 installed_path: path.to_string_lossy().to_string(),
@@ -1645,6 +1705,305 @@ pub fn activate_local_drive_folder_zero_copy(
         activated_count,
         fonts,
     })
+}
+
+/// Downloads & extracts official Fontshare desktop .otf/.ttf files from Fontshare's official zip,
+/// caches them locally, and activates them in macOS ~/Library/Fonts or Windows Fonts.
+#[tauri::command]
+pub async fn activate_fontshare_font(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    font_id: String,
+    slug: String,
+    family_name: String,
+) -> Result<ActivationResult, String> {
+    let clean_slug: String = slug
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    if clean_slug.is_empty() {
+        return Err("Invalid Fontshare font slug".to_string());
+    }
+
+    let safe_id = sanitize_segment(&font_id);
+    let fonts_dir = resolve_os_fonts_dir()?;
+    let manifest_path = resolve_manifest_path(&app)?;
+    let cache_dir = resolve_font_cache_dir(&app, &safe_id)?;
+
+    // Fast path: already active on disk
+    {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let manifest = load_manifest(&manifest_path);
+        if let Some(existing) = manifest.entries.get(&font_id) {
+            if !existing.files.is_empty()
+                && existing.files.iter().all(|f| Path::new(&f.installed_path).exists())
+            {
+                return Ok(ActivationResult {
+                    font_id,
+                    installed: true,
+                    already_active: true,
+                    file_count: existing.files.len(),
+                    fonts_dir: fonts_dir.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+
+    let mut font_files = list_cached_font_files(&cache_dir);
+
+    if font_files.is_empty() {
+        let client = reqwest::Client::builder()
+            .user_agent("Fontainer/1.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to initialize HTTP client: {e}"))?;
+
+        let download_url = format!("https://api.fontshare.com/v2/fonts/download/{clean_slug}");
+        let resp = client
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Unable to reach Fontshare for \"{family_name}\": {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Fontshare returned HTTP {} for \"{}\"",
+                resp.status(),
+                family_name
+            ));
+        }
+
+        let zip_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed reading Fontshare zip for \"{family_name}\": {e}"))?;
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
+            .map_err(|e| format!("Invalid Fontshare zip package: {e}"))?;
+
+        let mut otf_files = Vec::new();
+        let mut ttf_files = Vec::new();
+
+        for i in 0..archive.len() {
+            let Ok(mut entry) = archive.by_index(i) else {
+                continue;
+            };
+            if entry.is_dir() {
+                continue;
+            }
+            let raw_name = entry.name().to_string();
+            if raw_name.contains("__MACOSX") || raw_name.contains("/.") {
+                continue;
+            }
+            let lower = raw_name.to_ascii_lowercase();
+            // Skip variable duplicates if static OTF/TTF files exist, or keep all valid desktop fonts
+            if !(lower.ends_with(".otf") || lower.ends_with(".ttf")) {
+                continue;
+            }
+            let Some(file_name) = Path::new(&raw_name).file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let clean_name = sanitize_segment(
+                Path::new(file_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("font"),
+            );
+            let ext = if lower.ends_with(".otf") { "otf" } else { "ttf" };
+            let mut buf = Vec::new();
+            if entry.read_to_end(&mut buf).is_ok() && buf.len() >= 256 {
+                let cache_name = format!("{clean_name}.{ext}");
+                if ext == "otf" {
+                    otf_files.push((cache_name, buf));
+                } else {
+                    ttf_files.push((cache_name, buf));
+                }
+            }
+        }
+
+        // Prefer OTF desktop fonts when Fontshare bundles both OTF and TTF (avoids duplicate weights)
+        let chosen = if !otf_files.is_empty() { otf_files } else { ttf_files };
+        for (name, bytes) in chosen {
+            let _ = fs::write(cache_dir.join(&name), &bytes);
+            font_files.push((name, bytes));
+        }
+
+        if font_files.is_empty() {
+            return Err(format!(
+                "No .otf or .ttf desktop files found inside Fontshare package for \"{family_name}\"."
+            ));
+        }
+    }
+
+    let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+    let installed = install_files_into_os(&fonts_dir, &safe_id, &family_name, &font_files)?;
+    let mut manifest = load_manifest(&manifest_path);
+    manifest.version = 1;
+    manifest.entries.insert(
+        font_id.clone(),
+        ManifestFontEntry {
+            font_id: font_id.clone(),
+            display_name: family_name,
+            source: "fontshare".to_string(),
+            temporary: state.session_only.load(Ordering::Relaxed),
+            files: installed.clone(),
+        },
+    );
+    save_manifest(&manifest_path, &manifest)?;
+
+    Ok(ActivationResult {
+        font_id,
+        installed: true,
+        already_active: false,
+        file_count: installed.len(),
+        fonts_dir: fonts_dir.to_string_lossy().to_string(),
+    })
+}
+
+// ============================================================================
+// Watched / Auto-Active Local Folders (FontBase / RightFont style)
+// ============================================================================
+
+fn resolve_watched_folders_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?;
+    fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    Ok(data_dir.join("watched_folders.json"))
+}
+
+fn load_watched_folders(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_watched_folders(path: &Path, folders: &[String]) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(folders)
+        .map_err(|e| format!("Failed to serialize watched folders: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("Failed to save watched folders: {e}"))
+}
+
+#[tauri::command]
+pub fn list_watched_folders(app: AppHandle) -> Result<Vec<String>, String> {
+    let path = resolve_watched_folders_path(&app)?;
+    Ok(load_watched_folders(&path))
+}
+
+#[tauri::command]
+pub fn watch_local_folder(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    folder_path: String,
+) -> Result<ZeroCopyFolderResult, String> {
+    let trimmed = folder_path.trim().to_string();
+    if trimmed.is_empty() || !Path::new(&trimmed).is_dir() {
+        return Err(format!("Folder does not exist: {trimmed}"));
+    }
+    let wf_path = resolve_watched_folders_path(&app)?;
+    let mut folders = load_watched_folders(&wf_path);
+    if !folders.iter().any(|f| f == &trimmed) {
+        folders.push(trimmed.clone());
+        save_watched_folders(&wf_path, &folders)?;
+    }
+    activate_local_drive_folder_zero_copy(app, state, trimmed)
+}
+
+#[tauri::command]
+pub fn unwatch_local_folder(app: AppHandle, folder_path: String) -> Result<Vec<String>, String> {
+    let wf_path = resolve_watched_folders_path(&app)?;
+    let mut folders = load_watched_folders(&wf_path);
+    folders.retain(|f| f != folder_path.trim());
+    save_watched_folders(&wf_path, &folders)?;
+    Ok(folders)
+}
+
+/// Lightweight background poller (every 5s) that auto-activates any newly added .ttf/.otf
+/// files dropped into watched folders, emitting `watched-folder-updated` to refresh the UI.
+pub fn start_watched_folder_poller(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut known_paths: HashSet<String> = HashSet::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let Ok(wf_path) = resolve_watched_folders_path(&app) else {
+                continue;
+            };
+            let folders = load_watched_folders(&wf_path);
+            if folders.is_empty() {
+                continue;
+            }
+            let Ok(manifest_path) = resolve_manifest_path(&app) else {
+                continue;
+            };
+
+            let mut newly_registered = 0usize;
+            let mut new_entries = Vec::new();
+
+            for folder in &folders {
+                let root = PathBuf::from(folder);
+                if !root.is_dir() {
+                    continue;
+                }
+                let mut found = Vec::new();
+                walk_font_dir(&root, 0, &mut found);
+                for path in found {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if ext != "ttf" && ext != "otf" {
+                        continue;
+                    }
+                    let path_str = path.to_string_lossy().to_string();
+                    if !known_paths.insert(path_str.clone()) {
+                        continue;
+                    }
+                    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    let (family, _, _, _) = parse_filename_family_and_style(stem);
+                    let reg_name = platform_os::register_font(&path, &family).ok().flatten();
+                    newly_registered += 1;
+                    let font_id = format!("localzc-{}", sanitize_segment(&format!("{family}-{stem}")));
+                    new_entries.push(ManifestFontEntry {
+                        font_id,
+                        display_name: family,
+                        source: "watched-folder".to_string(),
+                        temporary: false,
+                        files: vec![InstalledFontFile {
+                            file_name: file_name.to_string(),
+                            installed_path: path_str,
+                            registry_name: reg_name,
+                            external_in_place: true,
+                        }],
+                    });
+                }
+            }
+
+            if newly_registered > 0 {
+                if let Some(state) = app.try_state::<FontActivatorState>() {
+                    if let Ok(_guard) = state.lock.lock() {
+                        let mut manifest = load_manifest(&manifest_path);
+                        manifest.version = 1;
+                        for entry in new_entries {
+                            manifest.entries.insert(entry.font_id.clone(), entry);
+                        }
+                        platform_os::broadcast_font_change();
+                        let _ = save_manifest(&manifest_path, &manifest);
+                    }
+                }
+                let _ = app.emit("watched-folder-updated", newly_registered);
+            }
+        }
+    });
 }
 
 #[cfg(test)]

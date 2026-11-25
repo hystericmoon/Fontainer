@@ -161,6 +161,94 @@ export async function fetchLiveGoogleFonts(
   return { total: data.total, source: data.source, fonts };
 }
 
+/** 1b. Fetch LIVE Fontshare Directory (100+ free commercial designer fonts by ITF) */
+export async function fetchLiveFontshareFonts(
+  libraryId = 'lib-fontshare',
+): Promise<{ total: number; fonts: FontFamily[] }> {
+  const resp = await fetch(resolveApiUrl('/api/fontshare-fonts'));
+  if (!resp.ok) {
+    throw new Error(`Fontshare directory returned HTTP ${resp.status}`);
+  }
+  const data = (await resp.json()) as {
+    total: number;
+    items: Array<{
+      slug: string;
+      family: string;
+      category: string;
+      designer: string;
+      styles: Array<{ label: string; weight: number; italic: boolean }>;
+      isVariable: boolean;
+      axes: string[];
+      features: string[];
+      version: string;
+      addedAt: string;
+    }>;
+  };
+
+  const fonts: FontFamily[] = (data.items ?? []).map((item) => {
+    const id = `fs-${item.slug}`;
+    const classification = mapGoogleCategory(item.category);
+    const fallback =
+      classification === 'Serif' || classification === 'Slab Serif'
+        ? 'serif'
+        : classification === 'Monospace'
+          ? 'monospace'
+          : 'sans-serif';
+    const styles: FontStyleVariant[] = (item.styles ?? []).map((s, idx) => ({
+      id: `${id}-${s.weight}${s.italic ? 'i' : ''}-${idx}`,
+      name: s.label || 'Regular',
+      weight: s.weight || 400,
+      italic: Boolean(s.italic),
+      postScriptName: `${item.family.replace(/\s+/g, '')}-${(s.label || 'Regular').replace(/\s+/g, '')}`,
+      activated: false,
+      fileSizeKb: 0,
+    }));
+
+    return {
+      id,
+      name: item.family,
+      cssFamily: `'${item.family}', ${fallback}`,
+      foundry: 'Fontshare (ITF)',
+      designer: item.designer || 'Indian Type Foundry',
+      classification,
+      format: item.isVariable ? 'Variable' : 'OTF',
+      width: /condensed|narrow/i.test(item.family)
+        ? 'Condensed'
+        : /expanded|wide/i.test(item.family)
+          ? 'Expanded'
+          : 'Normal',
+      isVariable: Boolean(item.isVariable),
+      license: 'ITF Free Font License (Commercial OK)',
+      version: item.version || '1.0',
+      languages: ['Latin'],
+      openTypeFeatures: item.features?.length ? item.features : ['liga', 'kern'],
+      libraryId,
+      addedAt: item.addedAt || new Date().toISOString(),
+      starred: false,
+      activated: false,
+      tags: ['fontshare', classification.toLowerCase().replace(/\s+/g, '-')],
+      notes: '',
+      fontshareSlug: item.slug,
+      styles:
+        styles.length > 0
+          ? styles
+          : [
+              {
+                id: `${id}-400`,
+                name: 'Regular',
+                weight: 400,
+                italic: false,
+                postScriptName: `${item.family.replace(/\s+/g, '')}-Regular`,
+                activated: false,
+                fileSizeKb: 0,
+              },
+            ],
+    };
+  });
+
+  return { total: data.total || fonts.length, fonts };
+}
+
 /** 2. Fetch LIVE Adobe Fonts (Typekit) Web Project Kit via /api/adobe-fonts/kit/:kitId */
 export async function fetchAdobeFontsKit(
   rawInput: string,

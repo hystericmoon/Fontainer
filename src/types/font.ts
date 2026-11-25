@@ -24,6 +24,7 @@ export type SortOption = 'name-asc' | 'name-desc' | 'styles-desc' | 'recent';
 export type LibraryProvider =
   | 'local'
   | 'google'
+  | 'fontshare'
   | 'adobe'
   | 'gdrive'
   | 'icloud'
@@ -72,6 +73,7 @@ export interface FontFamily {
   notes: string;
   isCustomUpload?: boolean;
   googleFontUrl?: string;
+  fontshareSlug?: string;
   adobeKitId?: string;
   driveFileId?: string;
   driveFileName?: string;
@@ -151,6 +153,13 @@ export interface OpenTypeState {
   zero: boolean;
 }
 
+export interface VariableAxesState {
+  wght: number;
+  wdth: number;
+  slnt: number;
+  opsz: number;
+}
+
 export interface PreviewSettings {
   text: string;
   fontSize: number;
@@ -161,6 +170,7 @@ export interface PreviewSettings {
   foregroundColor: string;
   backgroundColor: string;
   openType: OpenTypeState;
+  variableAxes?: VariableAxesState;
 }
 
 export interface DuplicateGroup {

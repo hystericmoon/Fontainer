@@ -6,6 +6,7 @@ import { buildOpenTypeFeatureSettings } from '../utils/fontFilter';
 import {
   ensureAdobeKitStylesheet,
   ensureCustomFontLoaded,
+  ensureFontshareFontLoaded,
   ensureGoogleFontLoaded,
 } from '../utils/fontLoader';
 
@@ -49,6 +50,8 @@ const FontGridCard: React.FC<{
     const loadFace = () => {
       if (font.adobeKitId) {
         ensureAdobeKitStylesheet(font.adobeKitId);
+      } else if (font.fontshareSlug) {
+        ensureFontshareFontLoaded(font.fontshareSlug, font.styles);
       } else if (font.isCustomUpload) {
         void ensureCustomFontLoaded(font.id, font.name);
       } else if (font.libraryId === 'lib-google') {

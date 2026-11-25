@@ -16,6 +16,14 @@ export const INITIAL_LIBRARIES: FontLibrary[] = [
     autoSync: true,
   },
   {
+    id: 'lib-fontshare',
+    name: 'Fontshare',
+    provider: 'fontshare',
+    path: 'https://www.fontshare.com',
+    syncedAt: new Date().toISOString(),
+    autoSync: true,
+  },
+  {
     id: 'lib-local',
     name: 'Local & Imported',
     provider: 'local',
@@ -58,6 +66,12 @@ export const DEFAULT_PREVIEW_SETTINGS: PreviewSettings = {
     onum: false,
     smcp: false,
     zero: false,
+  },
+  variableAxes: {
+    wght: 400,
+    wdth: 100,
+    slnt: 0,
+    opsz: 14,
   },
 };
 

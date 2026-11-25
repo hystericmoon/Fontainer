@@ -24,7 +24,11 @@ import {
   formatFileSize,
   generateFontCssSnippet,
 } from '../utils/fontFilter';
-import { ensureAdobeKitStylesheet, ensureGoogleFontLoaded } from '../utils/fontLoader';
+import {
+  ensureAdobeKitStylesheet,
+  ensureFontshareFontLoaded,
+  ensureGoogleFontLoaded,
+} from '../utils/fontLoader';
 import { FontPairingAssistant } from './FontPairingAssistant';
 
 interface InspectorPanelProps {
@@ -35,6 +39,7 @@ interface InspectorPanelProps {
   theme: ThemeMode;
   onUpdatePreview: (patch: Partial<PreviewSettings>) => void;
   onUpdateOpenType: (patch: Partial<OpenTypeState>) => void;
+  onUpdateVariableAxes?: (patch: Partial<NonNullable<PreviewSettings['variableAxes']>>) => void;
   onToggleActivate: (fontId: string) => void;
   onSelectFont: (fontId: string) => void;
   onComparePair: (primaryFontId: string, secondaryFontId: string) => void;
@@ -82,6 +87,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   theme,
   onUpdatePreview,
   onUpdateOpenType,
+  onUpdateVariableAxes,
   onToggleActivate,
   onSelectFont,
   onComparePair,
@@ -93,6 +99,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [tab, setTab] = useState<InspectorTab>('info');
   const [tagInput, setTagInput] = useState('');
   const [glyphCategory, setGlyphCategory] = useState<string>('Basic Latin');
+  const [glyphSearch, setGlyphSearch] = useState<string>('');
   const [selectedGlyph, setSelectedGlyph] = useState<string>('&');
   const [copiedCss, setCopiedCss] = useState(false);
 
@@ -100,6 +107,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     if (!font) return;
     if (font.adobeKitId) {
       ensureAdobeKitStylesheet(font.adobeKitId);
+    } else if (font.fontshareSlug) {
+      ensureFontshareFontLoaded(font.fontshareSlug, font.styles);
     } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
       ensureGoogleFontLoaded(font.name, font.styles);
     }
@@ -488,6 +497,80 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
             </section>
 
+            {/* Variable Font Axis Sliders */}
+            {font.isVariable && onUpdateVariableAxes && (
+              <section aria-label="Variable Font Axes" className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400">
+                    Variable Axes
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onUpdateVariableAxes({ wght: 400, wdth: 100, slnt: 0, opsz: 14 })
+                    }
+                    className="text-[11px] font-medium text-[var(--color-text-primary)] hover:underline cursor-pointer"
+                  >
+                    Reset Axes
+                  </button>
+                </div>
+
+                {[
+                  {
+                    key: 'wght' as const,
+                    label: 'Weight (wght)',
+                    min: 100,
+                    max: 900,
+                    step: 10,
+                    val: preview.variableAxes?.wght ?? 400,
+                  },
+                  {
+                    key: 'wdth' as const,
+                    label: 'Width (wdth)',
+                    min: 50,
+                    max: 150,
+                    step: 5,
+                    val: preview.variableAxes?.wdth ?? 100,
+                  },
+                  {
+                    key: 'slnt' as const,
+                    label: 'Slant (slnt)',
+                    min: -12,
+                    max: 0,
+                    step: 1,
+                    val: preview.variableAxes?.slnt ?? 0,
+                  },
+                  {
+                    key: 'opsz' as const,
+                    label: 'Optical Size (opsz)',
+                    min: 8,
+                    max: 144,
+                    step: 2,
+                    val: preview.variableAxes?.opsz ?? 14,
+                  },
+                ].map((axis) => (
+                  <div key={axis.key}>
+                    <div className="flex justify-between text-[11px] mb-1">
+                      <label htmlFor={`axis-${axis.key}`} className="text-neutral-600 dark:text-neutral-300">
+                        {axis.label}
+                      </label>
+                      <span className="font-code tabular-nums text-neutral-500">{axis.val}</span>
+                    </div>
+                    <input
+                      id={`axis-${axis.key}`}
+                      type="range"
+                      min={axis.min}
+                      max={axis.max}
+                      step={axis.step}
+                      value={axis.val}
+                      onChange={(e) => onUpdateVariableAxes({ [axis.key]: Number(e.target.value) })}
+                      className="mac-slider w-full"
+                    />
+                  </div>
+                ))}
+              </section>
+            )}
+
             {/* OpenType Features */}
             <section aria-label="OpenType Features">
               <h3 className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400 mb-2">
@@ -560,22 +643,32 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
             </div>
 
-            {/* Category Selector */}
-            <label className="block">
-              <span className="sr-only">Glyph Category</span>
-              <select
-                aria-label="Glyph Category"
-                value={activeGlyphCategory}
-                onChange={(e) => setGlyphCategory(e.target.value)}
-                className="w-full h-8 px-2.5 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] text-[12px] text-[var(--color-text-primary)] outline-none cursor-pointer"
-              >
-                {Object.keys(glyphSets).map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat} ({glyphSets[cat].length})
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* Category Selector + Glyph Search */}
+            <div className="space-y-2">
+              <input
+                type="search"
+                value={glyphSearch}
+                onChange={(e) => setGlyphSearch(e.target.value)}
+                placeholder="Search glyph or Unicode (e.g. €, 00A9, →)…"
+                aria-label="Search glyphs"
+                className="w-full h-8 px-2.5 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] text-[12px] text-[var(--color-text-primary)] outline-none focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1]"
+              />
+              <label className="block">
+                <span className="sr-only">Glyph Category</span>
+                <select
+                  aria-label="Glyph Category"
+                  value={activeGlyphCategory}
+                  onChange={(e) => setGlyphCategory(e.target.value)}
+                  className="w-full h-8 px-2.5 rounded-lg bg-white dark:bg-[#262626] border border-[var(--color-border)] text-[12px] text-[var(--color-text-primary)] outline-none cursor-pointer"
+                >
+                  {Object.keys(glyphSets).map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat} ({glyphSets[cat].length})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
 
             {/* Character Map Grid */}
             <div
@@ -583,13 +676,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               aria-label="Character Map"
               className="grid grid-cols-6 gap-1"
             >
-              {(glyphSets[activeGlyphCategory] ?? []).map((char, idx) => {
+              {(glyphSearch.trim()
+                ? Array.from(new Set(Object.values(glyphSets).flat())).filter((char) => {
+                    const q = glyphSearch.trim().toLowerCase();
+                    const hex = (char.codePointAt(0) ?? 0).toString(16).padStart(4, '0').toLowerCase();
+                    return char.toLowerCase().includes(q) || hex.includes(q.replace(/^u\+/, ''));
+                  })
+                : glyphSets[activeGlyphCategory] ?? []
+              ).map((char, idx) => {
                 const isSelected = selectedGlyph === char;
                 return (
                   <button
                     key={`${char}-${idx}`}
                     type="button"
                     onClick={() => setSelectedGlyph(char)}
+                    onDoubleClick={() => void copyToClipboard(char, `glyph "${char}"`)}
+                    title="Click to inspect · Double-click to copy"
                     aria-label={`Inspect glyph ${char}`}
                     aria-pressed={isSelected}
                     className={`h-10 flex items-center justify-center rounded-lg border text-[18px] transition-colors cursor-pointer ${

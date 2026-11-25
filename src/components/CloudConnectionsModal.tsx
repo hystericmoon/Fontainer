@@ -33,16 +33,22 @@ interface CloudConnectionsModalProps {
   hasDriveToken: boolean;
   googleTotal: number;
   googleLoading: boolean;
+  fontshareTotal: number;
   adobeKits: AdobeKitRecord[];
   onSignInGoogle: () => Promise<unknown>;
   onDriveTokenExpired: () => void;
   onRefreshGoogleFonts: () => Promise<void>;
+  onRefreshFontshareFonts: () => Promise<void>;
   onConnectAdobeKit: (kitId: string, name?: string) => Promise<number>;
   onRemoveAdobeKit: (kitId: string) => void;
   onImportGoogleDriveFiles: (files: RemoteFontFile[]) => Promise<number>;
   onActivateAllGoogleDrive: () => Promise<number>;
   localDriveFolders: DetectedLocalDriveFolder[];
   onActivateLocalDriveZeroCopy: (folderPath: string, label: string) => Promise<number>;
+  isDesktop?: boolean;
+  watchedFolders?: string[];
+  onAddWatchedFolder?: (folderPath: string) => Promise<number>;
+  onRemoveWatchedFolder?: (folderPath: string) => Promise<void>;
   onScanSystemFonts: () => Promise<number>;
   onConnectLocalFolder: (provider: LibraryProvider, label: string) => Promise<number>;
   onOpenFileUpload: () => void;
@@ -90,16 +96,22 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
   hasDriveToken,
   googleTotal,
   googleLoading,
+  fontshareTotal,
   adobeKits,
   onSignInGoogle,
   onDriveTokenExpired,
   onRefreshGoogleFonts,
+  onRefreshFontshareFonts,
   onConnectAdobeKit,
   onRemoveAdobeKit,
   onImportGoogleDriveFiles,
   onActivateAllGoogleDrive,
   localDriveFolders,
   onActivateLocalDriveZeroCopy,
+  isDesktop = false,
+  watchedFolders = [],
+  onAddWatchedFolder,
+  onRemoveWatchedFolder,
   onScanSystemFonts,
   onConnectLocalFolder,
   onOpenFileUpload,
@@ -123,6 +135,7 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
   // Local OS / Folder state
   const [localBusy, setLocalBusy] = useState<string | null>(null);
   const [localError, setLocalError] = useState('');
+  const [watchPathInput, setWatchPathInput] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -316,6 +329,37 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                     label={googleLoading ? 'Syncing…' : 'Refresh'}
                     icon={<RefreshCw className={`w-3.5 h-3.5 ${googleLoading ? 'animate-spin' : ''}`} />}
                     onClick={() => void onRefreshGoogleFonts()}
+                  />
+                </div>
+              </div>
+            </section>
+
+            {/* Live Fontshare (ITF) Directory */}
+            <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-body)] space-y-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <Type className="w-4 h-4 mt-0.5 shrink-0 text-[var(--color-text-primary)]" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-[13px]">Fontshare (Indian Type Foundry)</h3>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Live ({fontshareTotal} families)
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                      100+ free commercial-grade designer fonts (Satoshi, Clash Display, General
+                      Sans, Cabinet Grotesk) with 1-click Mac &amp; Windows OS activation.
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    label="Refresh"
+                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                    onClick={() => void onRefreshFontshareFonts()}
                   />
                 </div>
               </div>
@@ -667,6 +711,76 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                 />
               </div>
             </section>
+
+            {isDesktop && onAddWatchedFolder && (
+              <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] space-y-2.5">
+                <div>
+                  <h3 className="font-semibold text-[13px]">
+                    Watched Auto-Active Folders (FontBase / RightFont Style)
+                  </h3>
+                  <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                    Any <code>.ttf</code> or <code>.otf</code> font dropped into a watched folder
+                    automatically activates in-place with zero copying.
+                  </p>
+                </div>
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!watchPathInput.trim()) return;
+                    setLocalBusy('watch');
+                    setLocalError('');
+                    try {
+                      await onAddWatchedFolder(watchPathInput.trim());
+                      setWatchPathInput('');
+                    } catch (err) {
+                      setLocalError(
+                        err instanceof Error ? err.message : 'Unable to watch folder',
+                      );
+                    } finally {
+                      setLocalBusy(null);
+                    }
+                  }}
+                  className="flex items-center gap-2"
+                >
+                  <input
+                    type="text"
+                    value={watchPathInput}
+                    onChange={(e) => setWatchPathInput(e.target.value)}
+                    placeholder="Paste folder path (e.g. /Users/you/Fonts or G:\My Drive\Fonts)"
+                    className="flex-1 h-8 px-2.5 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[12px] font-code text-[var(--color-text-primary)] outline-none focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1]"
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isDisabled={localBusy === 'watch'}
+                    label="Watch Folder"
+                  />
+                </form>
+                {watchedFolders.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    {watchedFolders.map((folder) => (
+                      <div
+                        key={folder}
+                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-[var(--color-background-body)] border border-[var(--color-border)] text-[11.5px]"
+                      >
+                        <span className="font-code truncate">{folder}</span>
+                        {onRemoveWatchedFolder && (
+                          <button
+                            type="button"
+                            onClick={() => void onRemoveWatchedFolder(folder)}
+                            aria-label={`Stop watching ${folder}`}
+                            className="p-1 text-neutral-400 hover:text-red-500 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
 
             {localError && <p className="text-[11px] text-red-500">{localError}</p>}
           </div>

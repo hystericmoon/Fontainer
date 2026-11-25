@@ -6,6 +6,8 @@ export interface OsFontStatus {
   fontsDir: string;
   activeFontIds: string[];
   activeFileCount: number;
+  sessionOnly: boolean;
+  temporaryCount: number;
 }
 
 export interface OsActivationResult {
@@ -152,6 +154,64 @@ export async function activateGoogleFontInOs(
     familyName,
     styles,
   });
+}
+
+export async function activateFontshareFontInOs(
+  fontId: string,
+  slug: string,
+  familyName: string,
+): Promise<OsActivationResult | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<OsActivationResult>('activate_fontshare_font', {
+    fontId,
+    slug,
+    familyName,
+  });
+}
+
+export async function setSessionOnlyMode(enabled: boolean): Promise<boolean> {
+  if (!isTauriDesktop()) return false;
+  return invoke<boolean>('set_session_only_mode', { enabled });
+}
+
+export async function listWatchedFolders(): Promise<string[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<string[]>('list_watched_folders');
+}
+
+export async function watchLocalFolder(folderPath: string): Promise<ZeroCopyFolderResult | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<ZeroCopyFolderResult>('watch_local_folder', { folderPath });
+}
+
+export async function unwatchLocalFolder(folderPath: string): Promise<string[]> {
+  if (!isTauriDesktop()) return [];
+  return invoke<string[]>('unwatch_local_folder', { folderPath });
+}
+
+export async function subscribeDesktopEvents(callbacks: {
+  onOpenQuickSwitcher?: () => void;
+  onWatchedFolderUpdated?: (addedCount: number) => void;
+}): Promise<() => void> {
+  if (!isTauriDesktop()) return () => {};
+  const unsubs: Array<() => void> = [];
+  if (callbacks.onOpenQuickSwitcher) {
+    unsubs.push(
+      await listen('open-quick-switcher', () => {
+        callbacks.onOpenQuickSwitcher?.();
+      }),
+    );
+  }
+  if (callbacks.onWatchedFolderUpdated) {
+    unsubs.push(
+      await listen<number>('watched-folder-updated', (e) => {
+        callbacks.onWatchedFolderUpdated?.(Number(e.payload) || 0);
+      }),
+    );
+  }
+  return () => {
+    for (const u of unsubs) u();
+  };
 }
 
 export async function activateFontBinaryInOs(
