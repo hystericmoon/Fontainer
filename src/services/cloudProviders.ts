@@ -269,10 +269,8 @@ export async function fetchLiveFontshareFonts(
   return { total: data.total || fonts.length, fonts };
 }
 
-/** 1c. Fetch LIVE Indie Foundries (Collletttivo, UNCUT, Open Foundry — SIL OFL 1.1) */
-export async function fetchLiveIndieFoundries(
-  libraryId = 'lib-indie',
-): Promise<{ total: number; fonts: FontFamily[] }> {
+/** 1c. Fetch LIVE Indie Foundries (Collletttivo, Open Foundry, UNCUT — SIL OFL 1.1) */
+export async function fetchLiveIndieFoundries(): Promise<{ total: number; fonts: FontFamily[] }> {
   const resp = await fetch(resolveApiUrl('/api/indie-foundries'));
   if (!resp.ok) {
     throw new Error(`Indie Foundries directory returned HTTP ${resp.status}`);
@@ -297,6 +295,12 @@ export async function fetchLiveIndieFoundries(
 
   const now = new Date().toISOString();
   const fonts: FontFamily[] = (data.items ?? []).map((item, idx) => {
+    const targetLibraryId =
+      item.sourceCollection === 'Collletttivo'
+        ? 'lib-collletttivo'
+        : item.sourceCollection === 'Open Foundry'
+          ? 'lib-openfoundry'
+          : 'lib-uncut';
     const classification = mapGoogleCategory(item.category);
     const fallback =
       classification === 'Serif' || classification === 'Slab Serif'
@@ -328,7 +332,7 @@ export async function fetchLiveIndieFoundries(
       version: 'Live',
       languages: ['Latin'],
       openTypeFeatures: ['liga', 'kern'],
-      libraryId,
+      libraryId: targetLibraryId,
       addedAt: now,
       popularityRank: idx + 1,
       trendingRank: idx + 1,

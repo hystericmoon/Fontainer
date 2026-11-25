@@ -129,9 +129,9 @@ function loadLocalState(): LocalPersistedState {
     const libs = Array.isArray(parsed.libraries) && parsed.libraries.length > 0
       ? parsed.libraries
       : INITIAL_LIBRARIES;
-    const existingIds = new Set(libs.map((l) => l.id));
-    const missingBuiltIns = INITIAL_LIBRARIES.filter((l) => !existingIds.has(l.id));
-    const mergedLibs = [...missingBuiltIns, ...libs];
+    const builtInIdSet = new Set(INITIAL_LIBRARIES.map((l) => l.id));
+    const customLibs = libs.filter((l) => !builtInIdSet.has(l.id) && l.id !== 'lib-indie');
+    const mergedLibs = [...INITIAL_LIBRARIES, ...customLibs];
     return {
       customFonts: Array.isArray(parsed.customFonts) ? parsed.customFonts : [],
       libraries: mergedLibs,
@@ -351,15 +351,18 @@ export function useFontainerStore() {
     void refreshFontshareFonts(true);
   }, [refreshFontshareFonts]);
 
-  // Load REAL Live Indie Foundries (Collletttivo, UNCUT, Open Foundry — SIL OFL 1.1)
+  // Load REAL Live Indie Foundries (Collletttivo, Open Foundry, UNCUT — SIL OFL 1.1)
   const refreshIndieFoundries = useCallback(
     async (silent = false) => {
       try {
-        const res = await fetchLiveIndieFoundries('lib-indie');
+        const res = await fetchLiveIndieFoundries();
         setIndieFonts(res.fonts);
+        const now = new Date().toISOString();
         setLibraries((prev) =>
           prev.map((l) =>
-            l.id === 'lib-indie' ? { ...l, syncedAt: new Date().toISOString() } : l,
+            l.id === 'lib-collletttivo' || l.id === 'lib-openfoundry' || l.id === 'lib-uncut'
+              ? { ...l, syncedAt: now }
+              : l,
           ),
         );
         if (!silent) {
@@ -444,9 +447,17 @@ export function useFontainerStore() {
         },
         onLibraries: (cloudLibs) => {
           if (cloudLibs.length === 0) return;
-          const builtInIds = new Set(['lib-google', 'lib-fontshare', 'lib-indie', 'lib-local']);
+          const builtInIds = new Set([
+            'lib-google',
+            'lib-fontshare',
+            'lib-collletttivo',
+            'lib-openfoundry',
+            'lib-uncut',
+            'lib-local',
+            'lib-indie',
+          ]);
           setLibraries((prev) => {
-            const base = prev.filter((l) => builtInIds.has(l.id));
+            const base = prev.filter((l) => builtInIds.has(l.id) && l.id !== 'lib-indie');
             const custom = cloudLibs.filter((l) => !builtInIds.has(l.id));
             return [...base, ...custom];
           });
@@ -1042,13 +1053,15 @@ export function useFontainerStore() {
           : [...prev, lib];
         return next;
       });
-      if (
-        user &&
-        lib.id !== 'lib-google' &&
-        lib.id !== 'lib-fontshare' &&
-        lib.id !== 'lib-indie' &&
-        lib.id !== 'lib-local'
-      ) {
+      const builtInIds = new Set([
+        'lib-google',
+        'lib-fontshare',
+        'lib-collletttivo',
+        'lib-openfoundry',
+        'lib-uncut',
+        'lib-local',
+      ]);
+      if (user && !builtInIds.has(lib.id)) {
         void saveLibraryDoc(user.uid, lib);
       }
     },
@@ -1456,7 +1469,11 @@ export function useFontainerStore() {
         void refreshFontshareFonts(false);
         return;
       }
-      if (libraryId === 'lib-indie') {
+      if (
+        libraryId === 'lib-collletttivo' ||
+        libraryId === 'lib-openfoundry' ||
+        libraryId === 'lib-uncut'
+      ) {
         void refreshIndieFoundries(false);
         return;
       }
@@ -1506,12 +1523,15 @@ export function useFontainerStore() {
         setFontMeta((prev) => ({ ...prev, [existingIndie.id]: nextMeta }));
         if (user) void saveFontMetaDoc(user.uid, nextMeta);
         setSelectedFontId(existingIndie.id);
-        navigate({ type: 'library', id: 'lib-indie' });
-        showToast(`"${existingIndie.name}" is already in Indie Foundries — activated it for you`);
+        navigate({ type: 'library', id: existingIndie.libraryId });
+        showToast(`"${existingIndie.name}" is already in ${existingIndie.foundry} — activated it for you`);
         return;
       }
 
-      const family = await importGitHubFontRepo(rawRepo, 'lib-indie');
+      const targetLibId = normalizedQuery.startsWith('collletttivo/')
+        ? 'lib-collletttivo'
+        : 'lib-local';
+      const family = await importGitHubFontRepo(rawRepo, targetLibId);
       setCustomFonts((prev) => [family, ...prev.filter((f) => f.id !== family.id)]);
       const existing = fontMetaRef.current[family.id];
       const nextMeta: CloudFontMeta = {
@@ -1526,7 +1546,7 @@ export function useFontainerStore() {
         void saveFontMetaDoc(user.uid, nextMeta);
       }
       setSelectedFontId(family.id);
-      navigate({ type: 'library', id: 'lib-indie' });
+      navigate({ type: 'library', id: targetLibId });
       showToast(`Imported "${family.name}" from GitHub`);
     },
     [navigate, showToast, user],
