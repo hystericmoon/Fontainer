@@ -73,6 +73,8 @@ interface SidebarProps {
   onToggleSessionOnlyMode?: () => void;
   onOpenOsFontsFolder?: () => void;
   desktopUpdate?: DesktopUpdateInfo | null;
+  updateProgress?: number | null;
+  onInstallDesktopUpdate?: () => void;
   user: User | null;
   cloudSynced: boolean;
   onSignInGoogle: () => void;
@@ -118,6 +120,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleSessionOnlyMode,
   onOpenOsFontsFolder,
   desktopUpdate = null,
+  updateProgress = null,
+  onInstallDesktopUpdate,
   user,
   cloudSynced,
   onSignInGoogle,
@@ -600,18 +604,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
         </button>
         {isDesktop && desktopUpdate && (
-          <a
-            href={desktopUpdate.downloadUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/20 transition-colors"
+          <button
+            type="button"
+            disabled={updateProgress !== null}
+            onClick={() => {
+              if (onInstallDesktopUpdate) {
+                onInstallDesktopUpdate();
+              } else {
+                window.open(desktopUpdate.downloadUrl, '_blank', 'noreferrer');
+              }
+            }}
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-600/20 transition-colors cursor-pointer disabled:opacity-70"
           >
             <span className="flex items-center gap-2 min-w-0">
               <Download className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Update v{desktopUpdate.latestVersion}</span>
+              <span className="truncate">
+                {updateProgress !== null
+                  ? `Updating ${updateProgress}%…`
+                  : `Update v${desktopUpdate.latestVersion}`}
+              </span>
             </span>
-            <span className="text-[10px] font-code shrink-0">Get</span>
-          </a>
+            <span className="text-[10px] font-code shrink-0">
+              {updateProgress !== null ? 'Restart' : 'Install'}
+            </span>
+          </button>
         )}
         {isDesktop && onOpenOsFontsFolder && (
           <button

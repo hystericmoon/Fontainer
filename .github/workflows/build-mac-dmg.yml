@@ -47,11 +47,13 @@ jobs:
       - name: Build Universal macOS .app bundle
         env:
           VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.FONTAINER_API_URL || 'https://fontainer-alpha.vercel.app' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: npx tauri build --target universal-apple-darwin --bundles app
 
-      - name: Package drag-to-Applications .dmg (hdiutil)
+      - name: Package drag-to-Applications .dmg (hdiutil) & stage updater bundle
         run: |
-          rm -rf dmg-stage Fontainer-macOS-Universal.dmg
+          rm -rf dmg-stage Fontainer-macOS-Universal.dmg Fontainer-macOS-Universal.app.tar.gz Fontainer-macOS-Universal.app.tar.gz.sig
           mkdir -p dmg-stage
           cp -R "src-tauri/target/universal-apple-darwin/release/bundle/macos/Fontainer.app" dmg-stage/
           ln -s /Applications dmg-stage/Applications
@@ -61,12 +63,19 @@ jobs:
             -ov \
             -format UDZO \
             Fontainer-macOS-Universal.dmg
+          if [ -f "src-tauri/target/universal-apple-darwin/release/bundle/macos/Fontainer.app.tar.gz" ]; then
+            cp "src-tauri/target/universal-apple-darwin/release/bundle/macos/Fontainer.app.tar.gz" Fontainer-macOS-Universal.app.tar.gz
+            cp "src-tauri/target/universal-apple-darwin/release/bundle/macos/Fontainer.app.tar.gz.sig" Fontainer-macOS-Universal.app.tar.gz.sig
+          fi
 
-      - name: Upload macOS .dmg artifact
+      - name: Upload macOS .dmg & updater artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Fontainer-macOS-Universal-DMG
-          path: Fontainer-macOS-Universal.dmg
+          path: |
+            Fontainer-macOS-Universal.dmg
+            Fontainer-macOS-Universal.app.tar.gz
+            Fontainer-macOS-Universal.app.tar.gz.sig
           if-no-files-found: error
 
   build-windows-exe:
@@ -98,9 +107,11 @@ jobs:
       - name: Build Windows NSIS .exe installer
         env:
           VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.FONTAINER_API_URL || 'https://fontainer-alpha.vercel.app' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: npx tauri build --bundles nsis
 
-      - name: Stage Windows .exe installer
+      - name: Stage Windows .exe installer & updater signature
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
@@ -108,12 +119,18 @@ jobs:
             throw "Windows NSIS installer .exe not found in src-tauri/target/release/bundle/nsis"
           }
           Copy-Item $exe.FullName -Destination "Fontainer-Windows-x64-Setup.exe" -Force
+          $sig = "$($exe.FullName).sig"
+          if (Test-Path $sig) {
+            Copy-Item $sig -Destination "Fontainer-Windows-x64-Setup.exe.sig" -Force
+          }
 
-      - name: Upload Windows .exe artifact
+      - name: Upload Windows .exe & updater signature
         uses: actions/upload-artifact@v4
         with:
           name: Fontainer-Windows-x64-EXE
-          path: Fontainer-Windows-x64-Setup.exe
+          path: |
+            Fontainer-Windows-x64-Setup.exe
+            Fontainer-Windows-x64-Setup.exe.sig
           if-no-files-found: error
 
   publish-release:
@@ -135,10 +152,45 @@ jobs:
           name: Fontainer-Windows-x64-EXE
           path: release-assets
 
-      - name: Publish GitHub Release with .dmg and .exe
+      - name: Generate Tauri v2 latest.json updater manifest
+        run: |
+          export TAG="${GITHUB_REF_NAME}"
+          export VERSION="${TAG#v}"
+          export PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          export BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          export MAC_SIG="$(cat release-assets/Fontainer-macOS-Universal.app.tar.gz.sig 2>/dev/null || echo '')"
+          export WIN_SIG="$(cat release-assets/Fontainer-Windows-x64-Setup.exe.sig 2>/dev/null || echo '')"
+          node -e '
+            const fs = require("fs");
+            const platforms = {};
+            const macSig = (process.env.MAC_SIG || "").trim();
+            const winSig = (process.env.WIN_SIG || "").trim();
+            const base = process.env.BASE_URL;
+            if (macSig) {
+              platforms["darwin-aarch64"] = { signature: macSig, url: `${base}/Fontainer-macOS-Universal.app.tar.gz` };
+              platforms["darwin-x86_64"] = { signature: macSig, url: `${base}/Fontainer-macOS-Universal.app.tar.gz` };
+            }
+            if (winSig) {
+              platforms["windows-x86_64"] = { signature: winSig, url: `${base}/Fontainer-Windows-x64-Setup.exe` };
+            }
+            const manifest = {
+              version: process.env.VERSION,
+              notes: `Fontainer ${process.env.TAG} — automatic desktop update.`,
+              pub_date: process.env.PUB_DATE,
+              platforms,
+            };
+            fs.writeFileSync("release-assets/latest.json", JSON.stringify(manifest, null, 2));
+            console.log(JSON.stringify(manifest, null, 2));
+          '
+
+      - name: Publish GitHub Release with .dmg, .exe, and updater manifest
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release-assets/Fontainer-macOS-Universal.dmg
+            release-assets/Fontainer-macOS-Universal.app.tar.gz
+            release-assets/Fontainer-macOS-Universal.app.tar.gz.sig
             release-assets/Fontainer-Windows-x64-Setup.exe
+            release-assets/Fontainer-Windows-x64-Setup.exe.sig
+            release-assets/latest.json
           generate_release_notes: true

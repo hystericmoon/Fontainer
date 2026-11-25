@@ -10,6 +10,8 @@ use tauri::{Emitter, Manager, RunEvent};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(FontActivatorState::default())
         .setup(|app| {
             // Start background watched-folder auto-activator

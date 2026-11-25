@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '1.2.2';
 export const GITHUB_REPO = 'hystericmoon/Fontainer';
 export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
 export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
@@ -226,10 +226,25 @@ export interface DesktopUpdateInfo {
   releaseUrl: string;
 }
 
-/** Checks GitHub Releases for a newer desktop version (zero signing-key friction) */
+/** Checks GitHub Releases (or signed Tauri updater manifest) for a newer desktop version */
 export async function checkForDesktopUpdate(
   platform: string | null,
 ): Promise<DesktopUpdateInfo | null> {
+  if (isTauriDesktop()) {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update?.available && update.version) {
+        return {
+          latestVersion: update.version.replace(/^v/i, '').trim(),
+          downloadUrl: platform === 'windows' ? WIN_EXE_DOWNLOAD_URL : MAC_DMG_DOWNLOAD_URL,
+          releaseUrl: RELEASES_PAGE_URL,
+        };
+      }
+    } catch {
+      // Fall back to GitHub Releases JSON API below
+    }
+  }
   try {
     const resp = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
       signal: AbortSignal.timeout(8000),
@@ -248,6 +263,40 @@ export async function checkForDesktopUpdate(
     };
   } catch {
     return null;
+  }
+}
+
+/** Downloads, verifies, installs, and relaunches Fontainer silently inside the desktop app */
+export async function installDesktopUpdateInApp(
+  onProgress?: (percent: number) => void,
+): Promise<boolean> {
+  if (!isTauriDesktop()) return false;
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const { relaunch } = await import('@tauri-apps/plugin-process');
+    const update = await check();
+    if (!update?.available) return false;
+
+    let totalBytes = 0;
+    let downloadedBytes = 0;
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') {
+        totalBytes = event.data.contentLength ?? 0;
+        onProgress?.(5);
+      } else if (event.event === 'Progress') {
+        downloadedBytes += event.data.chunkLength;
+        if (totalBytes > 0) {
+          onProgress?.(Math.min(99, Math.round((downloadedBytes / totalBytes) * 100)));
+        }
+      } else if (event.event === 'Finished') {
+        onProgress?.(100);
+      }
+    });
+
+    await relaunch();
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -44,6 +44,7 @@ import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
 import {
   checkForDesktopUpdate,
+  installDesktopUpdateInApp,
   subscribeDesktopEvents,
   type DesktopUpdateInfo,
 } from './services/desktopFontActivator';
@@ -79,6 +80,7 @@ export default function App() {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_BATCH_SIZE);
   const [sharedStack, setSharedStack] = useState<SharedFontStackPayload | null>(null);
   const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdateInfo | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [activeSubfolder, setActiveSubfolder] = useState<string>('');
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -473,6 +475,19 @@ export default function App() {
             onToggleSessionOnlyMode={() => void store.toggleSessionOnlyMode()}
             onOpenOsFontsFolder={() => void store.openOsFontsFolder()}
             desktopUpdate={desktopUpdate}
+            updateProgress={updateProgress}
+            onInstallDesktopUpdate={() => {
+              if (!desktopUpdate || updateProgress !== null) return;
+              setUpdateProgress(1);
+              store.showToast(`Downloading Fontainer v${desktopUpdate.latestVersion}…`);
+              void installDesktopUpdateInApp((pct) => setUpdateProgress(pct)).then((installed) => {
+                if (!installed) {
+                  setUpdateProgress(null);
+                  window.open(desktopUpdate.downloadUrl, '_blank', 'noreferrer');
+                  store.showToast('Opened installer download in browser');
+                }
+              });
+            }}
             user={store.user}
             cloudSynced={store.cloudSynced}
             onSignInGoogle={() => void store.signInWithGoogle(false)}

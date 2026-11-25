@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Fontainer",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "identifier": "com.fontainer.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -43,6 +44,14 @@
         "installMode": "currentUser",
         "displayLanguageSelector": false
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDMjMyRjIxOTRGMTVEMUIKUldRYlhmR1VJUzhqUEhlSk41N1hzakZ2Q0U0elpMQkluQUd1akc2TGdab256eCt0NmdSbkZRMjMK",
+      "endpoints": [
+        "https://github.com/hystericmoon/Fontainer/releases/latest/download/latest.json"
+      ]
     }
   }
 }
