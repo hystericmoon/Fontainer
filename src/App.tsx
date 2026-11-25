@@ -908,11 +908,14 @@ export default function App() {
           googleTotal={store.googleTotal}
           googleLoading={store.googleLoading}
           fontshareTotal={store.fontshareTotal}
+          indieTotal={store.indieTotal}
           adobeKits={store.adobeKits}
           onSignInGoogle={() => store.signInWithGoogle(true)}
           onDriveTokenExpired={store.invalidateDriveToken}
           onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
           onRefreshFontshareFonts={() => store.refreshFontshareFonts(false)}
+          onRefreshIndieFoundries={() => store.refreshIndieFoundries(false)}
+          onImportGitHubRepo={store.importGitHubRepo}
           onConnectAdobeKit={store.connectAdobeKit}
           onRemoveAdobeKit={store.removeAdobeKit}
           onImportGoogleDriveFiles={store.importGoogleDriveFiles}

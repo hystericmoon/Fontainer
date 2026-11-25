@@ -9,6 +9,7 @@ const DB_VERSION = 1;
 const FONT_FILE_RE = /\.(ttf|otf|woff2?)$/i;
 const loadedGoogleFamilies = new Set<string>();
 const loadedFontshareSlugs = new Set<string>();
+const loadedRemoteUrls = new Set<string>();
 const loadedAdobeKits = new Set<string>();
 const loadedCustomFontIds = new Set<string>();
 
@@ -164,6 +165,22 @@ export function ensureFontshareFontLoaded(slug: string, styles?: FontStyleVarian
   link.href = `https://api.fontshare.com/v2/css?f[]=${encodeURIComponent(clean)}@${weights.join(',')}&display=swap`;
   link.dataset.fontainerFontshare = clean;
   document.head.appendChild(link);
+}
+
+/** Dynamically load a remote open-source CDN font (Collletttivo / UNCUT / Open Foundry / GitHub) via FontFace */
+export async function ensureRemoteFontLoaded(familyName: string, url: string): Promise<void> {
+  if (typeof window === 'undefined' || typeof FontFace === 'undefined' || !url || !familyName) return;
+  const key = `${familyName}::${url}`;
+  if (loadedRemoteUrls.has(key)) return;
+  loadedRemoteUrls.add(key);
+
+  try {
+    const face = new FontFace(familyName, `url(${url})`);
+    const loaded = await face.load();
+    document.fonts.add(loaded);
+  } catch {
+    // Non-fatal if CDN asset is temporarily unavailable
+  }
 }
 
 /** Dynamically inject a real Adobe Fonts (Typekit) stylesheet */

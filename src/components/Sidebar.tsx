@@ -167,6 +167,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return <Globe className="w-3.5 h-3.5 shrink-0" />;
       case 'fontshare':
         return <Sparkles className="w-3.5 h-3.5 shrink-0" />;
+      case 'indie':
+        return <Wand2 className="w-3.5 h-3.5 shrink-0" />;
       case 'adobe':
         return <Type className="w-3.5 h-3.5 shrink-0" />;
       case 'gdrive':

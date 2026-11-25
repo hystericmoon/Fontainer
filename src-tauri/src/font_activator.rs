@@ -1861,6 +1861,119 @@ pub async fn activate_fontshare_font(
     })
 }
 
+/// Downloads verified open-source .otf/.ttf files from jsDelivr / GitHub CDN (Collletttivo, UNCUT,
+/// Open Foundry, or user-imported GitHub repos), caches them locally, and activates them in the OS.
+#[tauri::command]
+pub async fn activate_url_font(
+    app: AppHandle,
+    state: tauri::State<'_, FontActivatorState>,
+    font_id: String,
+    family_name: String,
+    asset_urls: Vec<String>,
+) -> Result<ActivationResult, String> {
+    let safe_id = sanitize_segment(&font_id);
+    let fonts_dir = resolve_os_fonts_dir()?;
+    let manifest_path = resolve_manifest_path(&app)?;
+    let cache_dir = resolve_font_cache_dir(&app, &safe_id)?;
+
+    {
+        let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+        let manifest = load_manifest(&manifest_path);
+        if let Some(existing) = manifest.entries.get(&font_id) {
+            if !existing.files.is_empty()
+                && existing.files.iter().all(|f| Path::new(&f.installed_path).exists())
+            {
+                return Ok(ActivationResult {
+                    font_id,
+                    installed: true,
+                    already_active: true,
+                    file_count: existing.files.len(),
+                    fonts_dir: fonts_dir.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+
+    let mut font_files = list_cached_font_files(&cache_dir);
+
+    if font_files.is_empty() {
+        let valid_urls: Vec<String> = asset_urls
+            .into_iter()
+            .filter(|u| {
+                let lower = u.to_ascii_lowercase();
+                (lower.starts_with("https://cdn.jsdelivr.net/gh/")
+                    || lower.starts_with("https://raw.githubusercontent.com/"))
+                    && (lower.ends_with(".otf") || lower.ends_with(".ttf"))
+            })
+            .take(18)
+            .collect();
+
+        if valid_urls.is_empty() {
+            return Err(format!(
+                "No downloadable .otf or .ttf desktop files available for \"{family_name}\"."
+            ));
+        }
+
+        let client = reqwest::Client::builder()
+            .user_agent("Fontainer/1.0")
+            .timeout(std::time::Duration::from_secs(25))
+            .build()
+            .map_err(|e| format!("Failed to initialize HTTP client: {e}"))?;
+
+        for (idx, url) in valid_urls.iter().enumerate() {
+            let Ok(resp) = client.get(url).send().await else {
+                continue;
+            };
+            if !resp.status().is_success() {
+                continue;
+            }
+            let Ok(bytes) = resp.bytes().await else {
+                continue;
+            };
+            let vec = bytes.to_vec();
+            if vec.len() < 256 {
+                continue;
+            }
+            let ext = if url.to_ascii_lowercase().ends_with(".otf") {
+                "otf"
+            } else {
+                "ttf"
+            };
+            let cache_name = format!("style_{idx}.{ext}");
+            let _ = fs::write(cache_dir.join(&cache_name), &vec);
+            font_files.push((cache_name, vec));
+        }
+
+        if font_files.is_empty() {
+            return Err(format!("Failed to download font files for \"{family_name}\"."));
+        }
+    }
+
+    let _guard = state.lock.lock().map_err(|_| "Activator lock poisoned".to_string())?;
+    let installed = install_files_into_os(&fonts_dir, &safe_id, &family_name, &font_files)?;
+    let mut manifest = load_manifest(&manifest_path);
+    manifest.version = 1;
+    manifest.entries.insert(
+        font_id.clone(),
+        ManifestFontEntry {
+            font_id: font_id.clone(),
+            display_name: family_name,
+            source: "indie".to_string(),
+            temporary: state.session_only.load(Ordering::Relaxed),
+            files: installed.clone(),
+        },
+    );
+    save_manifest(&manifest_path, &manifest)?;
+
+    Ok(ActivationResult {
+        font_id,
+        installed: true,
+        already_active: false,
+        file_count: installed.len(),
+        fonts_dir: fonts_dir.to_string_lossy().to_string(),
+    })
+}
+
 // ============================================================================
 // Watched / Auto-Active Local Folders (FontBase / RightFont style)
 // ============================================================================

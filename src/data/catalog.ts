@@ -24,6 +24,14 @@ export const INITIAL_LIBRARIES: FontLibrary[] = [
     autoSync: true,
   },
   {
+    id: 'lib-indie',
+    name: 'Indie Foundries',
+    provider: 'indie',
+    path: 'Collletttivo · UNCUT · Open Foundry',
+    syncedAt: new Date().toISOString(),
+    autoSync: true,
+  },
+  {
     id: 'lib-local',
     name: 'Local & Imported',
     provider: 'local',

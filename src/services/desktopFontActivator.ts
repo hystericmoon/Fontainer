@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 export const GITHUB_REPO = 'hystericmoon/Fontainer';
 export const MAC_DMG_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-macOS-Universal.dmg`;
 export const WIN_EXE_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/Fontainer-Windows-x64-Setup.exe`;
@@ -173,6 +173,19 @@ export async function activateFontshareFontInOs(
     fontId,
     slug,
     familyName,
+  });
+}
+
+export async function activateUrlFontInOs(
+  fontId: string,
+  familyName: string,
+  assetUrls: string[],
+): Promise<OsActivationResult | null> {
+  if (!isTauriDesktop()) return null;
+  return invoke<OsActivationResult>('activate_url_font', {
+    fontId,
+    familyName,
+    assetUrls,
   });
 }
 

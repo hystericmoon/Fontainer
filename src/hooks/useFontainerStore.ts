@@ -13,7 +13,9 @@ import {
   fetchGoogleDriveFileMetadata,
   fetchLiveFontshareFonts,
   fetchLiveGoogleFonts,
+  fetchLiveIndieFoundries,
   groupDriveFilesIntoFamilies,
+  importGitHubFontRepo,
   listGoogleDriveFonts,
   type RemoteFontFile,
 } from '../services/cloudProviders';
@@ -23,6 +25,7 @@ import {
   activateFontshareFontInOs,
   activateGoogleFontInOs,
   activateLocalDriveFolderZeroCopy,
+  activateUrlFontInOs,
   batchActivateDriveFonts,
   batchDeactivateOsFonts,
   deactivateOsFont,
@@ -126,15 +129,9 @@ function loadLocalState(): LocalPersistedState {
     const libs = Array.isArray(parsed.libraries) && parsed.libraries.length > 0
       ? parsed.libraries
       : INITIAL_LIBRARIES;
-    const hasGoogle = libs.some((l) => l.id === 'lib-google');
-    const hasFontshare = libs.some((l) => l.id === 'lib-fontshare');
-    const hasLocal = libs.some((l) => l.id === 'lib-local');
-    const mergedLibs = [
-      ...(hasGoogle ? [] : [INITIAL_LIBRARIES[0]]),
-      ...(hasFontshare ? [] : [INITIAL_LIBRARIES[1]]),
-      ...(hasLocal ? [] : [INITIAL_LIBRARIES[2]]),
-      ...libs,
-    ];
+    const existingIds = new Set(libs.map((l) => l.id));
+    const missingBuiltIns = INITIAL_LIBRARIES.filter((l) => !existingIds.has(l.id));
+    const mergedLibs = [...missingBuiltIns, ...libs];
     return {
       customFonts: Array.isArray(parsed.customFonts) ? parsed.customFonts : [],
       libraries: mergedLibs,
@@ -196,6 +193,7 @@ export function useFontainerStore() {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [googleTotal, setGoogleTotal] = useState(0);
   const [fontshareFonts, setFontshareFonts] = useState<FontFamily[]>([]);
+  const [indieFonts, setIndieFonts] = useState<FontFamily[]>([]);
   const [styleOverrides, setStyleOverrides] = useState<Record<string, Record<string, boolean>>>({});
   const [adobeFonts, setAdobeFonts] = useState<FontFamily[]>([]);
   const [customFonts, setCustomFonts] = useState<FontFamily[]>(initial.customFonts);
@@ -229,6 +227,8 @@ export function useFontainerStore() {
   googleFontsRef.current = googleFonts;
   const fontshareFontsRef = useRef<FontFamily[]>(fontshareFonts);
   fontshareFontsRef.current = fontshareFonts;
+  const indieFontsRef = useRef<FontFamily[]>(indieFonts);
+  indieFontsRef.current = indieFonts;
   const customFontsRef = useRef<FontFamily[]>(customFonts);
   customFontsRef.current = customFonts;
   const osActiveIdsRef = useRef<Set<string>>(new Set());
@@ -351,6 +351,33 @@ export function useFontainerStore() {
     void refreshFontshareFonts(true);
   }, [refreshFontshareFonts]);
 
+  // Load REAL Live Indie Foundries (Collletttivo, UNCUT, Open Foundry — SIL OFL 1.1)
+  const refreshIndieFoundries = useCallback(
+    async (silent = false) => {
+      try {
+        const res = await fetchLiveIndieFoundries('lib-indie');
+        setIndieFonts(res.fonts);
+        setLibraries((prev) =>
+          prev.map((l) =>
+            l.id === 'lib-indie' ? { ...l, syncedAt: new Date().toISOString() } : l,
+          ),
+        );
+        if (!silent) {
+          showToast(`Synced ${res.fonts.length} open-source Indie Foundry families`);
+        }
+      } catch (err) {
+        if (!silent) {
+          showToast(err instanceof Error ? err.message : 'Unable to reach Indie Foundries');
+        }
+      }
+    },
+    [showToast],
+  );
+
+  useEffect(() => {
+    void refreshIndieFoundries(true);
+  }, [refreshIndieFoundries]);
+
   // Hydrate any persisted Adobe Fonts Web Project kits live
   useEffect(() => {
     for (const kit of adobeKits) {
@@ -417,13 +444,10 @@ export function useFontainerStore() {
         },
         onLibraries: (cloudLibs) => {
           if (cloudLibs.length === 0) return;
+          const builtInIds = new Set(['lib-google', 'lib-fontshare', 'lib-indie', 'lib-local']);
           setLibraries((prev) => {
-            const base = prev.filter(
-              (l) => l.id === 'lib-google' || l.id === 'lib-fontshare' || l.id === 'lib-local',
-            );
-            const custom = cloudLibs.filter(
-              (l) => l.id !== 'lib-google' && l.id !== 'lib-fontshare' && l.id !== 'lib-local',
-            );
+            const base = prev.filter((l) => builtInIds.has(l.id));
+            const custom = cloudLibs.filter((l) => !builtInIds.has(l.id));
             return [...base, ...custom];
           });
         },
@@ -497,7 +521,13 @@ export function useFontainerStore() {
 
   // Merge all real font sources + apply per-user metadata & per-weight style overrides
   const fonts: FontFamily[] = useMemo(() => {
-    const combined = [...customFonts, ...adobeFonts, ...fontshareFonts, ...googleFonts];
+    const combined = [
+      ...customFonts,
+      ...adobeFonts,
+      ...indieFonts,
+      ...fontshareFonts,
+      ...googleFonts,
+    ];
     return combined.map((font) => {
       const override = fontMeta[font.id];
       const perStyle = styleOverrides[font.id];
@@ -517,7 +547,7 @@ export function useFontainerStore() {
         styles,
       };
     });
-  }, [customFonts, adobeFonts, fontshareFonts, googleFonts, fontMeta, styleOverrides]);
+  }, [customFonts, adobeFonts, indieFonts, fontshareFonts, googleFonts, fontMeta, styleOverrides]);
 
   // Auto-select first available font for the inspector
   useEffect(() => {
@@ -1012,7 +1042,13 @@ export function useFontainerStore() {
           : [...prev, lib];
         return next;
       });
-      if (user && lib.id !== 'lib-google' && lib.id !== 'lib-local') {
+      if (
+        user &&
+        lib.id !== 'lib-google' &&
+        lib.id !== 'lib-fontshare' &&
+        lib.id !== 'lib-indie' &&
+        lib.id !== 'lib-local'
+      ) {
         void saveLibraryDoc(user.uid, lib);
       }
     },
@@ -1420,6 +1456,10 @@ export function useFontainerStore() {
         void refreshFontshareFonts(false);
         return;
       }
+      if (libraryId === 'lib-indie') {
+        void refreshIndieFoundries(false);
+        return;
+      }
       const lib = libraries.find((l) => l.id === libraryId);
       if (lib?.provider === 'adobe' && lib.remoteId) {
         void connectAdobeKit(lib.remoteId, lib.name).catch((err) => {
@@ -1432,7 +1472,38 @@ export function useFontainerStore() {
       );
       showToast(`Refreshed "${lib?.name ?? 'Library'}"`);
     },
-    [libraries, refreshGoogleFonts, connectAdobeKit, showToast],
+    [
+      libraries,
+      refreshGoogleFonts,
+      refreshFontshareFonts,
+      refreshIndieFoundries,
+      connectAdobeKit,
+      showToast,
+    ],
+  );
+
+  // Import ANY open-source GitHub font repository (UNCUT, Collletttivo, Open Foundry, etc.)
+  const handleImportGitHubRepo = useCallback(
+    async (rawRepo: string) => {
+      const family = await importGitHubFontRepo(rawRepo, 'lib-indie');
+      setCustomFonts((prev) => [family, ...prev.filter((f) => f.id !== family.id)]);
+      const existing = fontMetaRef.current[family.id];
+      const nextMeta: CloudFontMeta = {
+        fontId: family.id,
+        starred: existing?.starred ?? false,
+        activated: true,
+        tags: existing?.tags?.length ? existing.tags : family.tags,
+        notes: existing?.notes || family.notes,
+      };
+      setFontMeta((prev) => ({ ...prev, [family.id]: nextMeta }));
+      if (user) {
+        void saveFontMetaDoc(user.uid, nextMeta);
+      }
+      setSelectedFontId(family.id);
+      navigate({ type: 'library', id: 'lib-indie' });
+      showToast(`Imported "${family.name}" from GitHub`);
+    },
+    [navigate, showToast, user],
   );
 
   const importLocalFonts = useCallback(
@@ -1801,6 +1872,27 @@ export function useFontainerStore() {
               continue;
             }
 
+            // A3) Indie Foundries & Imported GitHub Repos (SIL OFL 1.1 via jsDelivr CDN)
+            const remoteFont =
+              indieFontsRef.current.find((f) => f.id === targetId) ??
+              currentCustom.find((f) => f.id === targetId && (f.remoteDesktopUrls?.length ?? 0) > 0);
+            if (remoteFont && remoteFont.remoteDesktopUrls && remoteFont.remoteDesktopUrls.length > 0) {
+              try {
+                const res = await activateUrlFontInOs(
+                  targetId,
+                  remoteFont.name,
+                  remoteFont.remoteDesktopUrls,
+                );
+                if (res?.installed) {
+                  osActiveIdsRef.current.add(targetId);
+                  if (!res.alreadyActive) totalActivated += 1;
+                }
+              } catch {
+                osSkippedIdsRef.current.add(targetId);
+              }
+              continue;
+            }
+
             // B) Google Drive Fonts -> use local cache / IndexedDB, or auto-download from Drive
             const driveFileId = extractDriveFileId(targetId);
             if (driveFileId) {
@@ -1952,6 +2044,8 @@ export function useFontainerStore() {
     cloudSynced,
     fontMeta,
     googleFonts,
+    fontshareFonts,
+    indieFonts,
     customFonts,
     hasDriveToken,
     osSyncNonce,
@@ -1994,9 +2088,12 @@ export function useFontainerStore() {
     googleError,
     googleTotal,
     fontshareTotal: fontshareFonts.length,
+    indieTotal: indieFonts.length,
     adobeKits,
     refreshGoogleFonts,
     refreshFontshareFonts,
+    refreshIndieFoundries,
+    importGitHubRepo: handleImportGitHubRepo,
     connectAdobeKit,
     removeAdobeKit,
     importGoogleDriveFiles,

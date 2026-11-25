@@ -256,6 +256,169 @@ export async function fetchLiveFontshareFonts(
   return { total: data.total || fonts.length, fonts };
 }
 
+/** 1c. Fetch LIVE Indie Foundries (Collletttivo, UNCUT, Open Foundry — SIL OFL 1.1) */
+export async function fetchLiveIndieFoundries(
+  libraryId = 'lib-indie',
+): Promise<{ total: number; fonts: FontFamily[] }> {
+  const resp = await fetch(resolveApiUrl('/api/indie-foundries'));
+  if (!resp.ok) {
+    throw new Error(`Indie Foundries directory returned HTTP ${resp.status}`);
+  }
+  const data = (await resp.json()) as {
+    total: number;
+    items: Array<{
+      id: string;
+      family: string;
+      foundry: string;
+      sourceCollection: string;
+      sourceUrl: string;
+      repo: string;
+      designer: string;
+      category: string;
+      license: string;
+      previewUrl: string;
+      desktopUrls: string[];
+      styles: Array<{ label: string; weight: number; italic: boolean }>;
+    }>;
+  };
+
+  const now = new Date().toISOString();
+  const fonts: FontFamily[] = (data.items ?? []).map((item, idx) => {
+    const classification = mapGoogleCategory(item.category);
+    const fallback =
+      classification === 'Serif' || classification === 'Slab Serif'
+        ? 'serif'
+        : classification === 'Monospace'
+          ? 'monospace'
+          : 'sans-serif';
+    const styles: FontStyleVariant[] = (item.styles ?? []).map((s, sIdx) => ({
+      id: `${item.id}-${s.weight}${s.italic ? 'i' : ''}-${sIdx}`,
+      name: s.label || 'Regular',
+      weight: s.weight || 400,
+      italic: Boolean(s.italic),
+      postScriptName: `${item.family.replace(/\s+/g, '')}-${(s.label || 'Regular').replace(/\s+/g, '')}`,
+      activated: false,
+      fileSizeKb: 0,
+    }));
+
+    return {
+      id: item.id,
+      name: item.family,
+      cssFamily: `'${item.family}', ${fallback}`,
+      foundry: item.foundry,
+      designer: item.designer,
+      classification,
+      format: item.desktopUrls.some((u) => /\.otf$/i.test(u)) ? 'OTF' : 'TTF',
+      width: 'Normal',
+      isVariable: false,
+      license: `${item.license} (Open Source)`,
+      version: 'Live',
+      languages: ['Latin'],
+      openTypeFeatures: ['liga', 'kern'],
+      libraryId,
+      addedAt: now,
+      popularityRank: idx + 1,
+      trendingRank: idx + 1,
+      starred: false,
+      activated: false,
+      tags: ['indie', item.sourceCollection.toLowerCase().replace(/\s+/g, '-')],
+      notes: `Source: ${item.sourceUrl} (github.com/${item.repo})`,
+      remotePreviewUrl: item.previewUrl,
+      remoteDesktopUrls: item.desktopUrls,
+      sourcePath: `${item.sourceCollection}/${item.family}`,
+      styles:
+        styles.length > 0
+          ? styles
+          : [
+              {
+                id: `${item.id}-400`,
+                name: 'Regular',
+                weight: 400,
+                italic: false,
+                postScriptName: `${item.family.replace(/\s+/g, '')}-Regular`,
+                activated: false,
+                fileSizeKb: 0,
+              },
+            ],
+    };
+  });
+
+  return { total: data.total || fonts.length, fonts };
+}
+
+/** 1d. Import ANY open-source GitHub font repository (from UNCUT, Collletttivo, Open Foundry, etc.) */
+export async function importGitHubFontRepo(
+  rawRepo: string,
+  libraryId = 'lib-indie',
+): Promise<FontFamily> {
+  const resp = await fetch(resolveApiUrl(`/api/github-fonts?repo=${encodeURIComponent(rawRepo.trim())}`));
+  const data = (await resp.json().catch(() => ({}))) as {
+    repo?: string;
+    family?: string;
+    previewUrl?: string;
+    desktopUrls?: string[];
+    styles?: Array<{ label: string; weight: number; italic: boolean }>;
+    error?: string;
+  };
+  if (!resp.ok || !data.repo || !data.family || !data.previewUrl) {
+    throw new Error(data.error || 'Could not load font files from that GitHub repository.');
+  }
+  const id = `gh-${data.repo.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 96)}`;
+  const styles: FontStyleVariant[] = (data.styles ?? []).map((s, idx) => ({
+    id: `${id}-${s.weight}${s.italic ? 'i' : ''}-${idx}`,
+    name: s.label || 'Regular',
+    weight: s.weight || 400,
+    italic: Boolean(s.italic),
+    postScriptName: `${data.family!.replace(/\s+/g, '')}-${(s.label || 'Regular').replace(/\s+/g, '')}`,
+    activated: true,
+    fileSizeKb: 0,
+  }));
+
+  return {
+    id,
+    name: data.family,
+    cssFamily: `'${data.family}', sans-serif`,
+    foundry: `GitHub (${data.repo})`,
+    designer: data.repo.split('/')[0],
+    classification: /serif/i.test(data.family)
+      ? 'Serif'
+      : /mono|code/i.test(data.family)
+        ? 'Monospace'
+        : 'Sans Serif',
+    format: (data.desktopUrls ?? []).some((u) => /\.otf$/i.test(u)) ? 'OTF' : 'TTF',
+    width: 'Normal',
+    isVariable: false,
+    license: 'Open Source (GitHub)',
+    version: 'GitHub',
+    languages: ['Latin'],
+    openTypeFeatures: ['liga', 'kern'],
+    libraryId,
+    addedAt: new Date().toISOString(),
+    starred: false,
+    activated: true,
+    tags: ['github', 'indie'],
+    notes: `Imported from https://github.com/${data.repo}`,
+    isCustomUpload: true,
+    remotePreviewUrl: data.previewUrl,
+    remoteDesktopUrls: data.desktopUrls ?? [],
+    sourcePath: `GitHub/${data.repo}`,
+    styles:
+      styles.length > 0
+        ? styles
+        : [
+            {
+              id: `${id}-400`,
+              name: 'Regular',
+              weight: 400,
+              italic: false,
+              postScriptName: `${data.family.replace(/\s+/g, '')}-Regular`,
+              activated: true,
+              fileSizeKb: 0,
+            },
+          ],
+  };
+}
+
 /** 2. Fetch LIVE Adobe Fonts (Typekit) Web Project Kit via /api/adobe-fonts/kit/:kitId */
 export async function fetchAdobeFontsKit(
   rawInput: string,

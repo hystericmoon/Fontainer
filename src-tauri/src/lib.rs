@@ -87,6 +87,7 @@ pub fn run() {
             font_activator::set_session_only_mode,
             font_activator::activate_google_font,
             font_activator::activate_fontshare_font,
+            font_activator::activate_url_font,
             font_activator::activate_font_binary,
             font_activator::activate_cached_font,
             font_activator::deactivate_os_font,

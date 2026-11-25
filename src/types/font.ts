@@ -34,6 +34,7 @@ export type LibraryProvider =
   | 'local'
   | 'google'
   | 'fontshare'
+  | 'indie'
   | 'adobe'
   | 'gdrive'
   | 'icloud'
@@ -86,6 +87,8 @@ export interface FontFamily {
   isCustomUpload?: boolean;
   googleFontUrl?: string;
   fontshareSlug?: string;
+  remotePreviewUrl?: string;
+  remoteDesktopUrls?: string[];
   adobeKitId?: string;
   driveFileId?: string;
   driveFileName?: string;

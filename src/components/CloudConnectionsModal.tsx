@@ -10,6 +10,7 @@ import {
   HardDrive,
   Laptop,
   RefreshCw,
+  Sparkles,
   Trash2,
   Type,
   Upload,
@@ -37,11 +38,14 @@ interface CloudConnectionsModalProps {
   googleTotal: number;
   googleLoading: boolean;
   fontshareTotal: number;
+  indieTotal: number;
   adobeKits: AdobeKitRecord[];
   onSignInGoogle: () => Promise<unknown>;
   onDriveTokenExpired: () => void;
   onRefreshGoogleFonts: () => Promise<void>;
   onRefreshFontshareFonts: () => Promise<void>;
+  onRefreshIndieFoundries: () => Promise<void>;
+  onImportGitHubRepo: (repo: string) => Promise<void>;
   onConnectAdobeKit: (kitId: string, name?: string) => Promise<number>;
   onRemoveAdobeKit: (kitId: string) => void;
   onImportGoogleDriveFiles: (files: RemoteFontFile[]) => Promise<number>;
@@ -100,11 +104,14 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
   googleTotal,
   googleLoading,
   fontshareTotal,
+  indieTotal,
   adobeKits,
   onSignInGoogle,
   onDriveTokenExpired,
   onRefreshGoogleFonts,
   onRefreshFontshareFonts,
+  onRefreshIndieFoundries,
+  onImportGitHubRepo,
   onConnectAdobeKit,
   onRemoveAdobeKit,
   onImportGoogleDriveFiles,
@@ -129,6 +136,11 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
   const [adobeBusy, setAdobeBusy] = useState(false);
   const [adobeError, setAdobeError] = useState('');
 
+  // Open-Source GitHub Font Repo state
+  const [ghRepoInput, setGhRepoInput] = useState('');
+  const [ghBusy, setGhBusy] = useState(false);
+  const [ghError, setGhError] = useState('');
+
   // Google Drive state
   const [driveFiles, setDriveFiles] = useState<RemoteFontFile[] | null>(null);
   const [selectedDriveIds, setSelectedDriveIds] = useState<string[]>([]);
@@ -144,6 +156,25 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
     if (!isOpen) return;
     setTab(initialTab);
   }, [isOpen, initialTab]);
+
+  const handleImportGitHub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ghRepoInput.trim()) {
+      setGhError('Paste a GitHub repo like collletttivo/apfel-grotezk or a full github.com URL.');
+      return;
+    }
+    setGhBusy(true);
+    setGhError('');
+    try {
+      await onImportGitHubRepo(ghRepoInput.trim());
+      setGhRepoInput('');
+      onClose();
+    } catch (err) {
+      setGhError(err instanceof Error ? err.message : 'Unable to import fonts from that GitHub repo');
+    } finally {
+      setGhBusy(false);
+    }
+  };
 
   const handleConnectAdobe = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -366,6 +397,66 @@ export const CloudConnectionsModal: React.FC<CloudConnectionsModalProps> = ({
                   />
                 </div>
               </div>
+            </section>
+
+            {/* Live Indie Foundries (Collletttivo · UNCUT · Open Foundry — SIL OFL 1.1) */}
+            <section className="p-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-background-body)] space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <Sparkles className="w-4 h-4 mt-0.5 shrink-0 text-[var(--color-text-primary)]" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold text-[13px]">
+                        Indie Foundries (Collletttivo · UNCUT · Open Foundry)
+                      </h3>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Live ({indieTotal} families)
+                      </span>
+                    </div>
+                    <p className="text-[12px] text-[var(--color-text-secondary)] mt-0.5 leading-relaxed">
+                      Curated 100% open-source (SIL OFL 1.1) indie typefaces streamed from official
+                      GitHub repositories with live web previews &amp; 1-click OS activation.
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    label="Refresh"
+                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                    onClick={() => void onRefreshIndieFoundries()}
+                  />
+                </div>
+              </div>
+
+              <form onSubmit={handleImportGitHub} className="pt-2.5 border-t border-[var(--color-border)] space-y-2">
+                <label className="block text-[11.5px] font-medium text-[var(--color-text-secondary)]">
+                  Import any open-source GitHub font repo (from UNCUT, Open Foundry, or Collletttivo)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={ghRepoInput}
+                    onChange={(e) => {
+                      setGhRepoInput(e.target.value);
+                      setGhError('');
+                    }}
+                    placeholder="owner/repo or https://github.com/collletttivo/apfel-grotezk"
+                    aria-label="GitHub Font Repository"
+                    className="flex-1 h-8 px-2.5 rounded-lg bg-[var(--color-background-surface)] border border-[var(--color-border)] text-[12px] font-code text-[var(--color-text-primary)] outline-none focus:border-[#1b1b1b] dark:focus:border-[#f1f1f1]"
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isDisabled={ghBusy || !ghRepoInput.trim()}
+                    label={ghBusy ? 'Importing…' : 'Import Repo'}
+                  />
+                </div>
+                {ghError && <p className="text-[11px] text-red-500">{ghError}</p>}
+              </form>
             </section>
 
             {/* Live Adobe Fonts (Typekit) Web Projects */}

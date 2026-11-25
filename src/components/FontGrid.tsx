@@ -8,6 +8,7 @@ import {
   ensureCustomFontLoaded,
   ensureFontshareFontLoaded,
   ensureGoogleFontLoaded,
+  ensureRemoteFontLoaded,
 } from '../utils/fontLoader';
 
 interface FontGridProps {
@@ -52,6 +53,8 @@ const FontGridCard: React.FC<{
         ensureAdobeKitStylesheet(font.adobeKitId);
       } else if (font.fontshareSlug) {
         ensureFontshareFontLoaded(font.fontshareSlug, font.styles);
+      } else if (font.remotePreviewUrl) {
+        void ensureRemoteFontLoaded(font.name, font.remotePreviewUrl);
       } else if (font.isCustomUpload) {
         void ensureCustomFontLoaded(font.id, font.name);
       } else if (font.libraryId === 'lib-google') {

@@ -53,6 +53,27 @@ interface CachedFontshareCatalog {
   items: FontshareCatalogItem[];
 }
 
+interface IndieFontCatalogItem {
+  id: string;
+  family: string;
+  foundry: string;
+  sourceCollection: 'Collletttivo' | 'UNCUT' | 'Open Foundry' | 'GitHub';
+  sourceUrl: string;
+  repo: string;
+  designer: string;
+  category: string;
+  license: string;
+  previewUrl: string;
+  desktopUrls: string[];
+  styles: Array<{ label: string; weight: number; italic: boolean }>;
+}
+
+interface CachedIndieCatalog {
+  fetchedAt: number;
+  etag: string;
+  items: IndieFontCatalogItem[];
+}
+
 interface ParsedAdobeKit {
   kitId: string;
   cssUrl: string;
@@ -86,6 +107,9 @@ let googleCatalogInFlight: Promise<CachedCatalog> | null = null;
 
 let fontshareCatalogCache: CachedFontshareCatalog | null = null;
 let fontshareCatalogInFlight: Promise<CachedFontshareCatalog> | null = null;
+
+let indieCatalogCache: CachedIndieCatalog | null = null;
+let indieCatalogInFlight: Promise<CachedIndieCatalog> | null = null;
 
 const adobeKitCache = new Map<string, CachedAdobeKit>();
 const adobeKitInFlight = new Map<string, Promise<ParsedAdobeKit>>();
@@ -420,6 +444,198 @@ async function fetchLiveFontshareCatalog(): Promise<CachedFontshareCatalog> {
   return fontshareCatalogInFlight;
 }
 
+interface JsDelivrNode {
+  type: 'file' | 'directory';
+  name: string;
+  files?: JsDelivrNode[];
+}
+
+function flattenJsDelivrTree(nodes: JsDelivrNode[], prefix = ''): string[] {
+  const out: string[] = [];
+  for (const node of nodes) {
+    const full = prefix ? `${prefix}/${node.name}` : node.name;
+    if (node.type === 'directory' && Array.isArray(node.files)) {
+      if (!node.name.startsWith('.') && node.name !== '__MACOSX') {
+        out.push(...flattenJsDelivrTree(node.files, full));
+      }
+    } else if (node.type === 'file') {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+async function resolveGitHubFontRepo(
+  repo: string,
+  preferredBranch?: string,
+): Promise<{ branch: string; previewUrl: string; desktopUrls: string[]; styles: Array<{ label: string; weight: number; italic: boolean }> }> {
+  const branches = preferredBranch ? [preferredBranch, 'main', 'master'] : ['main', 'master'];
+  const tried = new Set<string>();
+
+  for (const branch of branches) {
+    if (tried.has(branch)) continue;
+    tried.add(branch);
+    try {
+      const resp = await fetch(`https://data.jsdelivr.com/v1/packages/gh/${repo}@${branch}`, {
+        signal: AbortSignal.timeout(8000),
+        headers: { Accept: 'application/json', 'User-Agent': 'Fontainer/1.0' },
+      });
+      if (!resp.ok) continue;
+      const json = (await resp.json()) as { files?: JsDelivrNode[] };
+      const allPaths = flattenJsDelivrTree(json.files ?? []);
+      const otfPaths = allPaths.filter((p) => /\.otf$/i.test(p) && !/variable/i.test(p));
+      const ttfPaths = allPaths.filter((p) => /\.ttf$/i.test(p) && !/variable/i.test(p));
+      const woff2Paths = allPaths.filter((p) => /\.woff2$/i.test(p));
+      const desktopPaths = (otfPaths.length > 0 ? otfPaths : ttfPaths).slice(0, 18);
+      if (desktopPaths.length === 0 && woff2Paths.length === 0) continue;
+
+      const encodePath = (p: string) =>
+        p
+          .split('/')
+          .map((seg) => encodeURIComponent(seg))
+          .join('/');
+
+      const desktopUrls = desktopPaths.map(
+        (p) => `https://cdn.jsdelivr.net/gh/${repo}@${branch}/${encodePath(p)}`,
+      );
+      const regularPreviewPath =
+        woff2Paths.find((p) => /regular|book|normal|400/i.test(p)) ??
+        woff2Paths[0] ??
+        desktopPaths.find((p) => /regular|book|normal|400/i.test(p)) ??
+        desktopPaths[0];
+      const previewUrl = `https://cdn.jsdelivr.net/gh/${repo}@${branch}/${encodePath(regularPreviewPath)}`;
+
+      const styleSource = desktopPaths.length > 0 ? desktopPaths : woff2Paths.slice(0, 12);
+      const seenStyles = new Set<string>();
+      const styles: Array<{ label: string; weight: number; italic: boolean }> = [];
+      for (const p of styleSource) {
+        const fileName = p.split('/').pop() ?? p;
+        const lower = fileName.toLowerCase();
+        const italic = /italic|oblique/i.test(lower);
+        const weight = /thin|hairline/i.test(lower)
+          ? 100
+          : /extralight|ultralight/i.test(lower)
+            ? 200
+            : /light/i.test(lower)
+              ? 300
+              : /medium/i.test(lower)
+                ? 500
+                : /semibold|demi/i.test(lower)
+                  ? 600
+                  : /extrabold|heavy/i.test(lower)
+                    ? 800
+                    : /black/i.test(lower)
+                      ? 900
+                      : /bold/i.test(lower)
+                        ? 700
+                        : 400;
+        const key = `${weight}-${italic}`;
+        if (seenStyles.has(key)) continue;
+        seenStyles.add(key);
+        const wMap: Record<number, string> = {
+          100: 'Thin',
+          200: 'ExtraLight',
+          300: 'Light',
+          400: 'Regular',
+          500: 'Medium',
+          600: 'SemiBold',
+          700: 'Bold',
+          800: 'ExtraBold',
+          900: 'Black',
+        };
+        const base = wMap[weight] ?? 'Regular';
+        const label = italic ? (weight === 400 ? 'Italic' : `${base} Italic`) : base;
+        styles.push({ label, weight, italic });
+      }
+      styles.sort((a, b) => a.weight - b.weight || Number(a.italic) - Number(b.italic));
+
+      return { branch, previewUrl, desktopUrls, styles };
+    } catch {
+      // try next branch
+    }
+  }
+  throw new UpstreamHttpError(404, `No downloadable .otf, .ttf, or .woff2 font files found in github.com/${repo}.`);
+}
+
+// Verified SIL OFL 1.1 open-source indie typefaces from Collletttivo, UNCUT.wtf, and Open Foundry
+const CURATED_INDIE_REPOS: Array<{
+  id: string;
+  family: string;
+  foundry: string;
+  sourceCollection: 'Collletttivo' | 'UNCUT' | 'Open Foundry';
+  sourceUrl: string;
+  repo: string;
+  branch: string;
+  designer: string;
+  category: string;
+  license: string;
+}> = [
+  { id: 'indie-apfel-grotezk', family: 'Apfel Grotezk', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/apfel-grotezk', branch: 'main', designer: 'Luigi Gorlero (Collletttivo)', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-absans', family: 'Absans', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/absans', branch: 'main', designer: 'Valerio Monopoli (Collletttivo)', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-ortica', family: 'Ortica', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/ortica', branch: 'main', designer: 'Benedetta Bovani (Collletttivo)', category: 'Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-mazius-display', family: 'Mazius Display', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/mazius-display', branch: 'main', designer: 'Collletttivo', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-ronzino', family: 'Ronzino', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/ronzino', branch: 'main', designer: 'Luigi Gorlero (Collletttivo)', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-halibut', family: 'Halibut', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/halibut', branch: 'main', designer: 'Collletttivo', category: 'Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-coconat', family: 'Coconat', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/coconat', branch: 'main', designer: 'Sara Lavazza (Collletttivo)', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-messapia', family: 'Messapia', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/messapia', branch: 'main', designer: 'Luca Marsano (Collletttivo)', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-ribes', family: 'Ribes', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/ribes', branch: 'main', designer: 'Collletttivo', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-aujournuit', family: 'Aujournuit', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/aujournuit', branch: 'main', designer: 'Collletttivo', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-sneaky-times', family: 'Sneaky Times', foundry: 'Collletttivo', sourceCollection: 'Collletttivo', sourceUrl: 'https://www.collletttivo.it', repo: 'collletttivo/sneaky-times', branch: 'main', designer: 'Collletttivo', category: 'Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-uncut-sans', family: 'Uncut Sans', foundry: 'UNCUT', sourceCollection: 'UNCUT', sourceUrl: 'https://uncut.wtf', repo: 'kaspernordkvist/uncut_sans', branch: 'main', designer: 'Kasper Nordkvist (UNCUT)', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-bricolage-grotesque', family: 'Bricolage Grotesque', foundry: 'UNCUT / Open Foundry', sourceCollection: 'UNCUT', sourceUrl: 'https://uncut.wtf', repo: 'ateliertriay/bricolage', branch: 'main', designer: 'Mathieu Triay', category: 'Display', license: 'SIL OFL 1.1' },
+  { id: 'indie-space-grotesk', family: 'Space Grotesk', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'floriankarsten/space-grotesk', branch: 'master', designer: 'Florian Karsten', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-work-sans', family: 'Work Sans', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'weiweihuanghuang/Work-Sans', branch: 'master', designer: 'Wei Huang', category: 'Sans Serif', license: 'SIL OFL 1.1' },
+  { id: 'indie-syne', family: 'Syne', foundry: 'Open Foundry', sourceCollection: 'Open Foundry', sourceUrl: 'https://open-foundry.com', repo: 'Bonjour-Monde/Fonderie', branch: 'master', designer: 'Bonjour Monde', category: 'Display', license: 'SIL OFL 1.1' },
+];
+
+async function fetchLiveIndieFoundriesCatalog(): Promise<CachedIndieCatalog> {
+  if (indieCatalogCache && Date.now() - indieCatalogCache.fetchedAt < GOOGLE_CACHE_TTL_MS) {
+    return indieCatalogCache;
+  }
+  if (indieCatalogInFlight) {
+    return indieCatalogInFlight;
+  }
+
+  indieCatalogInFlight = (async () => {
+    const settled = await Promise.all(
+      CURATED_INDIE_REPOS.map(async (entry): Promise<IndieFontCatalogItem | null> => {
+        try {
+          const resolved = await resolveGitHubFontRepo(entry.repo, entry.branch);
+          return {
+            id: entry.id,
+            family: entry.family,
+            foundry: entry.foundry,
+            sourceCollection: entry.sourceCollection,
+            sourceUrl: entry.sourceUrl,
+            repo: entry.repo,
+            designer: entry.designer,
+            category: entry.category,
+            license: entry.license,
+            previewUrl: resolved.previewUrl,
+            desktopUrls: resolved.desktopUrls,
+            styles: resolved.styles,
+          } satisfies IndieFontCatalogItem;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    const items = settled.filter((item): item is IndieFontCatalogItem => Boolean(item));
+    const fresh: CachedIndieCatalog = {
+      fetchedAt: Date.now(),
+      etag: buildEtag(`indie:${items.length}:${items[0]?.id ?? ''}`),
+      items,
+    };
+    indieCatalogCache = fresh;
+    return fresh;
+  })().finally(() => {
+    indieCatalogInFlight = null;
+  });
+
+  return indieCatalogInFlight;
+}
+
 function parseAdobeTypekitCss(cssText: string, kitId: string): ParsedAdobeKit {
   const faceRegex = /@font-face\s*\{([^}]+)\}/gi;
   const familyMap = new Map<
@@ -673,6 +889,68 @@ export function createApiApp(options: CreateApiAppOptions = {}): Express {
     } catch (err) {
       res.status(502).json({
         error: err instanceof Error ? err.message : 'Failed to load Fontshare catalog',
+      });
+    }
+  });
+
+  // 1c. Live Indie & Open Foundries Proxy (Collletttivo, UNCUT, Open Foundry — SIL OFL 1.1 via jsDelivr)
+  app.get('/api/indie-foundries', catalogLimiter, async (req, res) => {
+    try {
+      const catalog = await fetchLiveIndieFoundriesCatalog();
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400');
+      res.setHeader('ETag', catalog.etag);
+      if (req.headers['if-none-match'] === catalog.etag) {
+        res.status(304).end();
+        return;
+      }
+      res.json({
+        source: 'indie-ofl-jsdelivr',
+        total: catalog.items.length,
+        items: catalog.items,
+      });
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to load Indie Foundries catalog',
+      });
+    }
+  });
+
+  // 1d. Import ANY open-source GitHub font repository (from UNCUT, Collletttivo, Open Foundry, etc.)
+  app.get('/api/github-fonts', adobeLimiter, async (req, res) => {
+    const rawRepo = String(req.query.repo || '').trim();
+    const cleaned = rawRepo
+      .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+      .replace(/\.git$/i, '')
+      .replace(/^\/+|\/+$/g, '');
+    const parts = cleaned.split('/').filter(Boolean);
+    if (parts.length < 2 || !/^[a-zA-Z0-9._-]+$/.test(parts[0]) || !/^[a-zA-Z0-9._-]+$/.test(parts[1])) {
+      res.status(400).json({
+        error: 'Enter a valid GitHub repository (e.g. collletttivo/apfel-grotezk or https://github.com/kaspernordkvist/uncut_sans).',
+      });
+      return;
+    }
+    const repo = `${parts[0]}/${parts[1]}`;
+    try {
+      const resolved = await resolveGitHubFontRepo(repo);
+      const prettyName = parts[1]
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=1800');
+      res.json({
+        repo,
+        branch: resolved.branch,
+        family: prettyName,
+        previewUrl: resolved.previewUrl,
+        desktopUrls: resolved.desktopUrls,
+        styles: resolved.styles,
+      });
+    } catch (err) {
+      if (err instanceof UpstreamHttpError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to inspect GitHub font repository',
       });
     }
   });

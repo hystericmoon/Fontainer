@@ -28,6 +28,7 @@ import {
   ensureAdobeKitStylesheet,
   ensureFontshareFontLoaded,
   ensureGoogleFontLoaded,
+  ensureRemoteFontLoaded,
 } from '../utils/fontLoader';
 import { FontPairingAssistant } from './FontPairingAssistant';
 
@@ -110,6 +111,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       ensureAdobeKitStylesheet(font.adobeKitId);
     } else if (font.fontshareSlug) {
       ensureFontshareFontLoaded(font.fontshareSlug, font.styles);
+    } else if (font.remotePreviewUrl) {
+      void ensureRemoteFontLoaded(font.name, font.remotePreviewUrl);
     } else if (!font.isCustomUpload && font.libraryId === 'lib-google') {
       ensureGoogleFontLoaded(font.name, font.styles);
     }
