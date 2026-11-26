@@ -2,9 +2,23 @@ mod desktop_auth;
 mod font_activator;
 
 use font_activator::FontActivatorState;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::{ActivationPolicy, WindowEvent};
 use tauri::{Emitter, Manager, RunEvent};
+
+/// Restores and focuses the main Fontainer window (and its Dock presence on macOS).
+fn show_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(ActivationPolicy::Regular);
+
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,24 +47,22 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit Fontainer", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quick_item, &folder_item, &quit_item])?;
+            let menu = Menu::with_items(
+                app,
+                &[&show_item, &quick_item, &folder_item, &separator, &quit_item],
+            )?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip("Fontainer — Font Manager")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        show_main_window(app);
                     }
                     "quick_switcher" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        show_main_window(app);
                         let _ = app.emit("open-quick-switcher", ());
                     }
                     "open_fonts_dir" => {
@@ -69,11 +81,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        show_main_window(tray.app_handle());
                     }
                 });
 
@@ -83,6 +91,20 @@ pub fn run() {
 
             let _ = tray_builder.build(app);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window
+                        .app_handle()
+                        .set_activation_policy(ActivationPolicy::Accessory);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
         })
         .invoke_handler(tauri::generate_handler![
             font_activator::get_os_font_status,
@@ -109,9 +131,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Fontainer desktop application");
 
-    app.run(|app_handle, event| {
-        if let RunEvent::Exit = event {
+    app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => {
+            if !has_visible_windows {
+                show_main_window(app_handle);
+            }
+        }
+        RunEvent::Exit => {
             font_activator::cleanup_temporary_fonts(app_handle);
         }
+        _ => {}
     });
 }

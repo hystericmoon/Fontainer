@@ -194,4 +194,5 @@ export interface DuplicateGroup {
   displayName: string;
   fonts: FontFamily[];
   reason: string;
+  hasActiveConflict?: boolean;
 }

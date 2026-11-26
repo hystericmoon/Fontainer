@@ -29,7 +29,7 @@ import {
 import { APP_VERSION, type DesktopUpdateInfo } from '../services/desktopFontActivator';
 import type { FontLibrary, FontList, SidebarDestination, SmartList } from '../types/font';
 import { GoogleSignInButton } from './CloudConnectionsModal';
-import { TOTAL_ICON_COUNT } from './IconLibraryView';
+import { TOTAL_ICON_COUNT } from '../utils/iconCount';
 
 interface SidebarProps {
   destination: SidebarDestination;
@@ -602,7 +602,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <CopyCheck className="w-3.5 h-3.5 text-neutral-500" />
             <span>Duplicate Finder</span>
           </span>
-          <span className="font-code tabular-nums text-[11px] text-amber-600 dark:text-amber-400">
+          <span
+            className={`font-code tabular-nums text-[11px] ${
+              duplicateCount > 0
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-emerald-600 dark:text-emerald-400'
+            }`}
+          >
             {duplicateCount > 0 ? `${duplicateCount} found` : 'Clean'}
           </span>
         </button>

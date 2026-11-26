@@ -8,6 +8,7 @@ import {
   evaluateSmartRule,
   findDuplicateFonts,
   formatFileSize,
+  formatFontVersion,
   generateFontCssSnippet,
   matchesSmartList,
 } from './fontFilter';
@@ -174,7 +175,52 @@ test('findDuplicateFonts detects cross-library duplicate font families', () => {
   assert.equal(dupes.length, 1);
   assert.equal(dupes[0].displayName, 'Fraunces');
   assert.equal(dupes[0].fonts.length, 2);
+  assert.equal(dupes[0].hasActiveConflict, true);
   assert.match(dupes[0].reason, /multiple font libraries/i);
+});
+
+test('findDuplicateFonts ignores inactive catalog-only overlaps and flags real conflicts', () => {
+  const base = SAMPLE_FONTS[0];
+  const inactiveCatalogOverlap: FontFamily[] = [
+    { ...base, id: 'anton-fs', name: 'Anton', libraryId: 'lib-fontshare', activated: false },
+    { ...base, id: 'anton-gf', name: 'Anton', libraryId: 'lib-google', activated: false },
+  ];
+  assert.deepEqual(findDuplicateFonts(inactiveCatalogOverlap), []);
+
+  const activeCatalogOverlap: FontFamily[] = [
+    { ...base, id: 'anton-gf', name: 'Anton', libraryId: 'lib-google', activated: true },
+    { ...base, id: 'anton-fs', name: 'Anton', libraryId: 'lib-fontshare', activated: true },
+  ];
+  const activeDupes = findDuplicateFonts(activeCatalogOverlap);
+  assert.equal(activeDupes.length, 1);
+  assert.equal(activeDupes[0].hasActiveConflict, true);
+  assert.equal(activeDupes[0].fonts[0].libraryId, 'lib-fontshare');
+
+  const singleLocalPlusInactiveCatalog: FontFamily[] = [
+    { ...base, id: 'inter-local', name: 'Inter', libraryId: 'lib-local', isCustomUpload: true, activated: false },
+    { ...base, id: 'inter-gf', name: 'Inter', libraryId: 'lib-google', activated: false },
+  ];
+  assert.deepEqual(findDuplicateFonts(singleLocalPlusInactiveCatalog), []);
+
+  const multiUserOwnedInactive: FontFamily[] = [
+    { ...base, id: 'inter-gdrive', name: 'Inter', libraryId: 'lib-gdrive', isCustomUpload: true, activated: false },
+    { ...base, id: 'inter-local', name: 'Inter', libraryId: 'lib-local', isCustomUpload: true, activated: false },
+    { ...base, id: 'inter-gf', name: 'Inter', libraryId: 'lib-google', activated: false },
+  ];
+  const userOwnedDupes = findDuplicateFonts(multiUserOwnedInactive);
+  assert.equal(userOwnedDupes.length, 1);
+  assert.equal(userOwnedDupes[0].hasActiveConflict, false);
+  assert.deepEqual(
+    userOwnedDupes[0].fonts.map((f) => f.id),
+    ['inter-local', 'inter-gdrive'],
+  );
+});
+
+test('formatFontVersion normalizes prefixes cleanly', () => {
+  assert.equal(formatFontVersion('v27'), 'v27');
+  assert.equal(formatFontVersion('2.116'), 'v2.116');
+  assert.equal(formatFontVersion('Live'), 'Live');
+  assert.equal(formatFontVersion(''), '');
 });
 
 test('countActiveFilterFacets and formatting utilities work accurately', () => {

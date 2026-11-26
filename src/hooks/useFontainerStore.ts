@@ -928,6 +928,48 @@ export function useFontainerStore() {
     [isDesktop, showToast, user],
   );
 
+  const removeFontFamilies = useCallback(
+    (fontIds: string[], toastLabel?: string) => {
+      if (fontIds.length === 0) return;
+      const idSet = new Set(fontIds);
+      setCustomFonts((prev) => prev.filter((f) => !idSet.has(f.id)));
+      setAdobeFonts((prev) => prev.filter((f) => !idSet.has(f.id)));
+      setFontLists((prev) =>
+        prev.map((l) => {
+          const next = { ...l, fontIds: l.fontIds.filter((id) => !idSet.has(id)) };
+          if (user && next.fontIds.length !== l.fontIds.length) void saveFontListDoc(user.uid, next);
+          return next;
+        }),
+      );
+      setCompareIds((prev) => prev.filter((id) => !idSet.has(id)));
+      setCheckedFontIds((prev) => prev.filter((id) => !idSet.has(id)));
+
+      const metaUpdates: Record<string, CloudFontMeta> = {};
+      for (const fontId of idSet) {
+        void deleteStoredFontBuffer(fontId);
+        if (isDesktop) {
+          void deactivateOsFont(fontId)
+            .then(() => {
+              osActiveIdsRef.current.delete(fontId);
+              setOsActiveCount(osActiveIdsRef.current.size);
+            })
+            .catch(() => {});
+        }
+        const existingMeta = fontMetaRef.current[fontId];
+        if (existingMeta?.activated) {
+          const deactivatedMeta: CloudFontMeta = { ...existingMeta, activated: false };
+          metaUpdates[fontId] = deactivatedMeta;
+          if (user) void saveFontMetaDoc(user.uid, deactivatedMeta);
+        }
+      }
+      if (Object.keys(metaUpdates).length > 0) {
+        setFontMeta((prev) => ({ ...prev, ...metaUpdates }));
+      }
+      showToast(toastLabel ?? `Removed ${idSet.size} duplicate ${idSet.size === 1 ? 'font' : 'fonts'}`);
+    },
+    [isDesktop, showToast, user],
+  );
+
   // Font Lists
   const createFontList = useCallback(
     (name: string, color: string) => {
@@ -2264,6 +2306,7 @@ export function useFontainerStore() {
     removeTagFromFont,
     updateFontNotes,
     removeFontFamily,
+    removeFontFamilies,
     createFontList,
     deleteFontList,
     addFontsToList,

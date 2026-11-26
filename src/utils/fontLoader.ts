@@ -1,4 +1,4 @@
-import opentype from 'opentype.js';
+import type opentype from 'opentype.js';
 import { isTauriDesktop, scanSystemFontsNative } from '../services/desktopFontActivator';
 import type { FontClassification, FontFamily, FontFormat, FontStyleVariant } from '../types/font';
 
@@ -271,7 +271,8 @@ export async function parseAndLoadFontBuffer(
   // Parse real OpenType/TrueType binary tables via opentype.js (for .ttf, .otf, .woff)
   if (!fileName.toLowerCase().endsWith('.woff2')) {
     try {
-      const parsed = opentype.parse(buffer.slice(0));
+      const { default: opentypeLib } = await import('opentype.js');
+      const parsed = opentypeLib.parse(buffer.slice(0));
       const names = parsed.names;
       const prefFamily = readNameEntry(names, 'preferredFamily') || readNameEntry(names, 'fontFamily');
       const prefSub = readNameEntry(names, 'preferredSubfamily') || readNameEntry(names, 'fontSubfamily');

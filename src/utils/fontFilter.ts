@@ -235,6 +235,47 @@ export function countActiveFilterFacets(filters: FilterState): number {
   return count;
 }
 
+const BROWSE_CATALOG_LIBRARY_IDS = new Set([
+  'lib-google',
+  'lib-fontshare',
+  'lib-collletttivo',
+  'lib-openfoundry',
+  'lib-uncut',
+]);
+
+export function isBrowseCatalogFont(font: FontFamily): boolean {
+  return BROWSE_CATALOG_LIBRARY_IDS.has(font.libraryId) && !font.isCustomUpload;
+}
+
+export function getDuplicatePriority(font: FontFamily): number {
+  const { libraryId } = font;
+  if (libraryId === 'lib-local' || libraryId === 'lib-system-os' || libraryId.startsWith('lib-folder')) {
+    return 1;
+  }
+  if (
+    libraryId.startsWith('lib-gdrive') ||
+    libraryId.startsWith('lib-icloud') ||
+    libraryId.startsWith('lib-box') ||
+    libraryId.startsWith('lib-adobe')
+  ) {
+    return 2;
+  }
+  if (libraryId === 'lib-collletttivo' || libraryId === 'lib-openfoundry' || libraryId === 'lib-uncut') {
+    return 3;
+  }
+  if (libraryId === 'lib-fontshare') return 4;
+  if (libraryId === 'lib-google') return 5;
+  return 3;
+}
+
+export function formatFontVersion(version?: string): string {
+  const trimmed = (version ?? '').trim();
+  if (!trimmed) return '';
+  if (/^live$/i.test(trimmed)) return 'Live';
+  if (/^v\d/i.test(trimmed)) return trimmed;
+  return `v${trimmed}`;
+}
+
 export function findDuplicateFonts(fonts: FontFamily[]): DuplicateGroup[] {
   const byName = new Map<string, FontFamily[]>();
 
@@ -247,25 +288,52 @@ export function findDuplicateFonts(fonts: FontFamily[]): DuplicateGroup[] {
 
   const duplicates: DuplicateGroup[] = [];
   for (const [normalizedName, group] of byName.entries()) {
-    if (group.length > 1) {
-      const libs = new Set(group.map((g) => g.libraryId));
-      const formats = new Set(group.map((g) => g.format));
-      let reason = 'Duplicate family entry';
-      if (libs.size > 1) {
-        reason = 'Installed across multiple font libraries';
-      } else if (formats.size > 1) {
-        reason = 'Conflicting font formats in same library';
-      }
-      duplicates.push({
-        normalizedName,
-        displayName: group[0].name,
-        fonts: group,
-        reason,
-      });
+    if (group.length <= 1) continue;
+
+    // Only flag real conflicts: 2+ active copies, or 2+ user-owned (local/synced/uploaded) copies.
+    // Inactive entries appearing in multiple free browse catalogs (e.g. Google Fonts & Fontshare) are ignored.
+    const relevant = group.filter((f) => f.activated || !isBrowseCatalogFont(f));
+    const activeCount = relevant.filter((f) => f.activated).length;
+    const userOwnedCount = relevant.filter((f) => !isBrowseCatalogFont(f)).length;
+    if (activeCount < 2 && userOwnedCount < 2) continue;
+
+    const sorted = [...relevant].sort(
+      (a, b) =>
+        getDuplicatePriority(a) - getDuplicatePriority(b) ||
+        Number(b.activated) - Number(a.activated) ||
+        Number(b.isVariable) - Number(a.isVariable) ||
+        b.styles.length - a.styles.length,
+    );
+
+    const libs = new Set(sorted.map((g) => g.libraryId));
+    const formats = new Set(sorted.map((g) => g.format));
+    const hasActiveConflict = activeCount >= 2;
+
+    let reason = 'Duplicate copies in the same library';
+    if (hasActiveConflict && libs.size > 1) {
+      reason = 'Active across multiple font libraries';
+    } else if (hasActiveConflict) {
+      reason = 'Multiple active copies in the same library';
+    } else if (libs.size > 1) {
+      reason = 'Duplicate copies across multiple font libraries';
+    } else if (formats.size > 1) {
+      reason = 'Conflicting font formats in same library';
     }
+
+    duplicates.push({
+      normalizedName,
+      displayName: sorted[0].name,
+      fonts: sorted,
+      reason,
+      hasActiveConflict,
+    });
   }
 
-  return duplicates.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return duplicates.sort(
+    (a, b) =>
+      Number(Boolean(b.hasActiveConflict)) - Number(Boolean(a.hasActiveConflict)) ||
+      a.displayName.localeCompare(b.displayName),
+  );
 }
 
 export function buildOpenTypeFeatureSettings(ot: OpenTypeState): string {

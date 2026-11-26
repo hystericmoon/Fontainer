@@ -1,12 +1,17 @@
 import './index.css';
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
-import { DesktopAuthPage } from './components/DesktopAuthPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { LegalPage } from './components/LegalPage';
 import { isTauriDesktop } from './services/desktopFontActivator';
+
+const DesktopAuthPage = lazy(() =>
+  import('./components/DesktopAuthPage').then((m) => ({ default: m.DesktopAuthPage })),
+);
+const LegalPage = lazy(() =>
+  import('./components/LegalPage').then((m) => ({ default: m.LegalPage })),
+);
 
 if (!isTauriDesktop()) {
   registerSW({ immediate: true });
@@ -44,13 +49,25 @@ const RootRouter: React.FC = () => {
   };
 
   if (route === '/desktop-auth') {
-    return <DesktopAuthPage />;
+    return (
+      <Suspense fallback={null}>
+        <DesktopAuthPage />
+      </Suspense>
+    );
   }
   if (route === '/privacy') {
-    return <LegalPage page="privacy" onNavigate={navigateTo} />;
+    return (
+      <Suspense fallback={null}>
+        <LegalPage page="privacy" onNavigate={navigateTo} />
+      </Suspense>
+    );
   }
   if (route === '/terms') {
-    return <LegalPage page="terms" onNavigate={navigateTo} />;
+    return (
+      <Suspense fallback={null}>
+        <LegalPage page="terms" onNavigate={navigateTo} />
+      </Suspense>
+    );
   }
   return <App />;
 };

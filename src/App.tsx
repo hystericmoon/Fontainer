@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Theme } from '@astryxdesign/core';
 import { Button } from '@astryxdesign/core/Button';
 import {
@@ -14,32 +14,12 @@ import {
   X,
 } from 'lucide-react';
 import { defaultThemeSlug, themes } from './astryx-themes';
-import { CloudConnectionsModal } from './components/CloudConnectionsModal';
-import { CompareView } from './components/CompareView';
 import { FilterBar } from './components/FilterBar';
 import { FontGrid } from './components/FontGrid';
 import { FontRow } from './components/FontRow';
-import { IconLibraryView, TOTAL_ICON_COUNT } from './components/IconLibraryView';
 import { InspectorPanel } from './components/InspectorPanel';
-import { InstallMacModal } from './components/InstallMacModal';
-import {
-  decodeSharedFontStack,
-  encodeSharedFontStack,
-  MissingFontsModal,
-  SharedStackModal,
-  type SharedFontStackPayload,
-} from './components/ProjectSyncModals';
-import {
-  DuplicateFinderModal,
-  ImportFontsModal,
-  NewFontListModal,
-  NewSmartListModal,
-  PreferencesModal,
-  QuickSwitcherModal,
-} from './components/Modals';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
-import { WaterfallView } from './components/WaterfallView';
 import { useFontainerStore } from './hooks/useFontainerStore';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
 import {
@@ -50,6 +30,52 @@ import {
   type DesktopUpdateInfo,
 } from './services/desktopFontActivator';
 import { countActiveFilterFacets } from './utils/fontFilter';
+import { TOTAL_ICON_COUNT } from './utils/iconCount';
+import {
+  decodeSharedFontStack,
+  encodeSharedFontStack,
+  type SharedFontStackPayload,
+} from './utils/sharedStack';
+
+const CloudConnectionsModal = lazy(() =>
+  import('./components/CloudConnectionsModal').then((m) => ({ default: m.CloudConnectionsModal })),
+);
+const CompareView = lazy(() =>
+  import('./components/CompareView').then((m) => ({ default: m.CompareView })),
+);
+const IconLibraryView = lazy(() =>
+  import('./components/IconLibraryView').then((m) => ({ default: m.IconLibraryView })),
+);
+const InstallMacModal = lazy(() =>
+  import('./components/InstallMacModal').then((m) => ({ default: m.InstallMacModal })),
+);
+const MissingFontsModal = lazy(() =>
+  import('./components/ProjectSyncModals').then((m) => ({ default: m.MissingFontsModal })),
+);
+const SharedStackModal = lazy(() =>
+  import('./components/ProjectSyncModals').then((m) => ({ default: m.SharedStackModal })),
+);
+const DuplicateFinderModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.DuplicateFinderModal })),
+);
+const ImportFontsModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.ImportFontsModal })),
+);
+const NewFontListModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.NewFontListModal })),
+);
+const NewSmartListModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.NewSmartListModal })),
+);
+const PreferencesModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.PreferencesModal })),
+);
+const QuickSwitcherModal = lazy(() =>
+  import('./components/Modals').then((m) => ({ default: m.QuickSwitcherModal })),
+);
+const WaterfallView = lazy(() =>
+  import('./components/WaterfallView').then((m) => ({ default: m.WaterfallView })),
+);
 
 type ActiveModal =
   | null
@@ -420,23 +446,43 @@ export default function App() {
     }
   };
 
-  const toggleExpandFamily = (fontId: string) => {
+  const checkedIdSet = useMemo(() => new Set(store.checkedFontIds), [store.checkedFontIds]);
+  const compareIdSet = useMemo(() => new Set(store.compareIds), [store.compareIds]);
+
+  const toggleExpandFamily = useCallback((fontId: string) => {
     setExpandedFamilyIds((prev) => ({ ...prev, [fontId]: !prev[fontId] }));
-  };
+  }, []);
+
+  const handleAddFontToList = useCallback(
+    (listId: string, fontId: string) => {
+      store.addFontsToList(listId, [fontId]);
+    },
+    [store.addFontsToList],
+  );
 
   const canvasBgClass =
     store.theme === 'sepia'
       ? 'bg-[#F8F5EE] text-[#1C1917]'
       : 'bg-[#FFFFFF] dark:bg-[#1B1B1B] text-[var(--color-text-primary)]';
 
-  const handleCopyCss = async (snippet: string) => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      store.showToast('Copied CSS @import snippet');
-    } catch {
-      store.showToast('CSS snippet ready');
-    }
-  };
+  const handleCopyCss = useCallback(
+    async (snippet: string) => {
+      try {
+        await navigator.clipboard.writeText(snippet);
+        store.showToast('Copied CSS @import snippet');
+      } catch {
+        store.showToast('CSS snippet ready');
+      }
+    },
+    [store.showToast],
+  );
+
+  const handleCopyCssSync = useCallback(
+    (snippet: string) => {
+      void handleCopyCss(snippet);
+    },
+    [handleCopyCss],
+  );
 
   return (
     <Theme theme={themes[defaultThemeSlug]} mode={store.theme === 'dark' ? 'dark' : 'light'}>
@@ -733,15 +779,31 @@ export default function App() {
               className={`flex-1 min-w-0 h-full overflow-y-auto ${canvasBgClass}`}
             >
               {store.destination.type === 'icons' ? (
-                <IconLibraryView onNotify={store.showToast} />
+                <Suspense
+                  fallback={
+                    <div className="h-full flex items-center justify-center text-[12px] text-neutral-500">
+                      Loading icon library…
+                    </div>
+                  }
+                >
+                  <IconLibraryView onNotify={store.showToast} />
+                </Suspense>
               ) : store.viewMode === 'compare' ? (
-                <CompareView
-                  allFonts={store.fonts}
-                  compareIds={store.compareIds}
-                  preview={store.preview}
-                  onToggleCompare={store.toggleCompare}
-                  onSelectFont={store.setSelectedFontId}
-                />
+                <Suspense
+                  fallback={
+                    <div className="h-full flex items-center justify-center text-[12px] text-neutral-500">
+                      Loading compare view…
+                    </div>
+                  }
+                >
+                  <CompareView
+                    allFonts={store.fonts}
+                    compareIds={store.compareIds}
+                    preview={store.preview}
+                    onToggleCompare={store.toggleCompare}
+                    onSelectFont={store.setSelectedFontId}
+                  />
+                </Suspense>
               ) : store.googleLoading && store.fonts.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center p-10 text-center">
                   <Loader2 className="w-6 h-6 animate-spin text-neutral-400 mb-3" />
@@ -802,13 +864,21 @@ export default function App() {
                   </div>
                 </div>
               ) : store.viewMode === 'waterfall' ? (
-                <WaterfallView
-                  fonts={renderedFonts}
-                  selectedFont={store.selectedFont}
-                  preview={store.preview}
-                  onSelectFont={store.setSelectedFontId}
-                  onToggleActivate={store.toggleFontActivation}
-                />
+                <Suspense
+                  fallback={
+                    <div className="h-full flex items-center justify-center text-[12px] text-neutral-500">
+                      Loading waterfall…
+                    </div>
+                  }
+                >
+                  <WaterfallView
+                    fonts={renderedFonts}
+                    selectedFont={store.selectedFont}
+                    preview={store.preview}
+                    onSelectFont={store.setSelectedFontId}
+                    onToggleActivate={store.toggleFontActivation}
+                  />
+                </Suspense>
               ) : store.viewMode === 'grid' ? (
                 <>
                   <FontGrid
@@ -852,22 +922,20 @@ export default function App() {
                       libraryName={libraryMap[font.libraryId] ?? 'Library'}
                       preview={store.preview}
                       selected={store.selectedFont?.id === font.id}
-                      checked={store.checkedFontIds.includes(font.id)}
+                      checked={checkedIdSet.has(font.id)}
                       expanded={Boolean(expandedFamilyIds[font.id])}
-                      inCompare={store.compareIds.includes(font.id)}
+                      inCompare={compareIdSet.has(font.id)}
                       fontLists={store.fontLists}
-                      onSelect={() => store.setSelectedFontId(font.id)}
-                      onToggleCheck={() => store.toggleCheckedFont(font.id)}
-                      onToggleExpand={() => toggleExpandFamily(font.id)}
-                      onToggleActivate={() => store.toggleFontActivation(font.id)}
-                      onToggleStyleActivate={(styleId) => store.toggleStyleActivation(font.id, styleId)}
-                      onToggleStar={() => store.toggleStar(font.id)}
-                      onToggleCompare={() => store.toggleCompare(font.id)}
-                      onAddToList={(listId) => store.addFontsToList(listId, [font.id])}
-                      onRemoveFont={
-                        font.isCustomUpload ? () => store.removeFontFamily(font.id) : undefined
-                      }
-                      onCopyCss={(snippet) => void handleCopyCss(snippet)}
+                      onSelect={store.setSelectedFontId}
+                      onToggleCheck={store.toggleCheckedFont}
+                      onToggleExpand={toggleExpandFamily}
+                      onToggleActivate={store.toggleFontActivation}
+                      onToggleStyleActivate={store.toggleStyleActivation}
+                      onToggleStar={store.toggleStar}
+                      onToggleCompare={store.toggleCompare}
+                      onAddToList={handleAddFontToList}
+                      onRemoveFont={store.removeFontFamily}
+                      onCopyCss={handleCopyCssSync}
                     />
                   ))}
                   {hasMoreFonts && (
@@ -933,126 +1001,136 @@ export default function App() {
           </div>
         )}
 
-        {/* Production Cloud & Foundry Connections Hub */}
-        <CloudConnectionsModal
-          isOpen={activeModal === 'connections'}
-          user={store.user}
-          hasDriveToken={store.hasDriveToken}
-          googleTotal={store.googleTotal}
-          googleLoading={store.googleLoading}
-          fontshareTotal={store.fontshareTotal}
-          indieTotal={store.indieTotal}
-          adobeKits={store.adobeKits}
-          onSignInGoogle={() => store.signInWithGoogle(true)}
-          onDriveTokenExpired={store.invalidateDriveToken}
-          onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
-          onRefreshFontshareFonts={() => store.refreshFontshareFonts(false)}
-          onRefreshIndieFoundries={() => store.refreshIndieFoundries(false)}
-          onImportGitHubRepo={store.importGitHubRepo}
-          onConnectAdobeKit={store.connectAdobeKit}
-          onRemoveAdobeKit={store.removeAdobeKit}
-          onImportGoogleDriveFiles={store.importGoogleDriveFiles}
-          onActivateAllGoogleDrive={store.activateAllGoogleDriveFonts}
-          localDriveFolders={store.localDriveFolders}
-          onActivateLocalDriveZeroCopy={store.activateLocalDriveZeroCopy}
-          isDesktop={store.isDesktop}
-          watchedFolders={store.watchedFolders}
-          onAddWatchedFolder={store.addWatchedFolder}
-          onRemoveWatchedFolder={store.removeWatchedFolder}
-          onScanSystemFonts={store.scanSystemFonts}
-          onConnectLocalFolder={store.connectLocalFolder}
-          onOpenFileUpload={() => setActiveModal('import')}
-          onClose={() => setActiveModal(null)}
-          onNotify={store.showToast}
-        />
+        {/* Production Cloud & Foundry Connections Hub & Workspace Modals */}
+        <Suspense fallback={null}>
+          {activeModal === 'connections' && (
+            <CloudConnectionsModal
+              isOpen
+              user={store.user}
+              hasDriveToken={store.hasDriveToken}
+              googleTotal={store.googleTotal}
+              googleLoading={store.googleLoading}
+              fontshareTotal={store.fontshareTotal}
+              indieTotal={store.indieTotal}
+              adobeKits={store.adobeKits}
+              onSignInGoogle={() => store.signInWithGoogle(true)}
+              onDriveTokenExpired={store.invalidateDriveToken}
+              onRefreshGoogleFonts={() => store.refreshGoogleFonts(false)}
+              onRefreshFontshareFonts={() => store.refreshFontshareFonts(false)}
+              onRefreshIndieFoundries={() => store.refreshIndieFoundries(false)}
+              onImportGitHubRepo={store.importGitHubRepo}
+              onConnectAdobeKit={store.connectAdobeKit}
+              onRemoveAdobeKit={store.removeAdobeKit}
+              onImportGoogleDriveFiles={store.importGoogleDriveFiles}
+              onActivateAllGoogleDrive={store.activateAllGoogleDriveFonts}
+              localDriveFolders={store.localDriveFolders}
+              onActivateLocalDriveZeroCopy={store.activateLocalDriveZeroCopy}
+              isDesktop={store.isDesktop}
+              watchedFolders={store.watchedFolders}
+              onAddWatchedFolder={store.addWatchedFolder}
+              onRemoveWatchedFolder={store.removeWatchedFolder}
+              onScanSystemFonts={store.scanSystemFonts}
+              onConnectLocalFolder={store.connectLocalFolder}
+              onOpenFileUpload={() => setActiveModal('import')}
+              onClose={() => setActiveModal(null)}
+              onNotify={store.showToast}
+            />
+          )}
 
-        {/* Workspace Modals */}
-        {activeModal === 'new-list' && (
-          <NewFontListModal
-            onClose={() => setActiveModal(null)}
-            onCreate={store.createFontList}
-          />
-        )}
+          {activeModal === 'new-list' && (
+            <NewFontListModal
+              onClose={() => setActiveModal(null)}
+              onCreate={store.createFontList}
+            />
+          )}
 
-        {activeModal === 'new-smart' && (
-          <NewSmartListModal
-            fonts={store.fonts}
-            onClose={() => setActiveModal(null)}
-            onCreate={store.createSmartList}
-          />
-        )}
+          {activeModal === 'new-smart' && (
+            <NewSmartListModal
+              fonts={store.fonts}
+              onClose={() => setActiveModal(null)}
+              onCreate={store.createSmartList}
+            />
+          )}
 
-        {activeModal === 'import' && (
-          <ImportFontsModal
-            libraries={store.libraries}
-            onClose={() => setActiveModal(null)}
-            onImport={store.importLocalFonts}
-          />
-        )}
+          {activeModal === 'import' && (
+            <ImportFontsModal
+              libraries={store.libraries}
+              onClose={() => setActiveModal(null)}
+              onImport={store.importLocalFonts}
+            />
+          )}
 
-        {activeModal === 'preferences' && (
-          <PreferencesModal
-            theme={store.theme}
-            onSetTheme={store.setTheme}
-            onResetLibrary={store.resetAllData}
-            onClose={() => setActiveModal(null)}
-          />
-        )}
+          {activeModal === 'preferences' && (
+            <PreferencesModal
+              theme={store.theme}
+              onSetTheme={store.setTheme}
+              onResetLibrary={store.resetAllData}
+              onClose={() => setActiveModal(null)}
+            />
+          )}
 
-        {activeModal === 'duplicates' && (
-          <DuplicateFinderModal
-            groups={store.duplicateGroups}
-            libraries={store.libraries}
-            onDeactivate={store.toggleFontActivation}
-            onBulkDeactivate={(ids, label) =>
-              store.batchSetActivation(ids, false, { toastOverride: label })
-            }
-            onRemove={store.removeFontFamily}
-            onClose={() => setActiveModal(null)}
-          />
-        )}
+          {activeModal === 'duplicates' && (
+            <DuplicateFinderModal
+              groups={store.duplicateGroups}
+              libraries={store.libraries}
+              onDeactivate={(id) => store.batchSetActivation([id], false)}
+              onBulkDeactivate={(ids, label) =>
+                store.batchSetActivation(ids, false, { toastOverride: label })
+              }
+              onRemove={store.removeFontFamily}
+              onBulkRemove={store.removeFontFamilies}
+              onClose={() => setActiveModal(null)}
+            />
+          )}
 
-        {activeModal === 'quick-switcher' && (
-          <QuickSwitcherModal
-            fonts={store.fonts}
-            onToggleActivate={store.toggleFontActivation}
-            onSelectFont={(id) => {
-              store.setSelectedFontId(id);
-              store.navigate({ type: 'all' });
-            }}
-            onClose={() => setActiveModal(null)}
-          />
-        )}
+          {activeModal === 'quick-switcher' && (
+            <QuickSwitcherModal
+              fonts={store.fonts}
+              onToggleActivate={store.toggleFontActivation}
+              onSelectFont={(id) => {
+                store.setSelectedFontId(id);
+                store.navigate({ type: 'all' });
+              }}
+              onClose={() => setActiveModal(null)}
+            />
+          )}
 
-        <InstallMacModal
-          isOpen={activeModal === 'install-mac'}
-          isInstallable={pwa.isInstallable}
-          isInstalled={pwa.isInstalled}
-          isSafari={pwa.isSafari}
-          isIOS={pwa.isIOS}
-          onInstallPwa={pwa.install}
-          onClose={() => setActiveModal(null)}
-          onNotify={store.showToast}
-        />
+          {activeModal === 'install-mac' && (
+            <InstallMacModal
+              isOpen
+              isInstallable={pwa.isInstallable}
+              isInstalled={pwa.isInstalled}
+              isSafari={pwa.isSafari}
+              isIOS={pwa.isIOS}
+              onInstallPwa={pwa.install}
+              onClose={() => setActiveModal(null)}
+              onNotify={store.showToast}
+            />
+          )}
 
-        <MissingFontsModal
-          isOpen={activeModal === 'missing-fonts'}
-          allFonts={store.fonts}
-          onActivateIds={(ids) => store.batchSetActivation(ids, true)}
-          onClose={() => setActiveModal(null)}
-          onNotify={store.showToast}
-        />
+          {activeModal === 'missing-fonts' && (
+            <MissingFontsModal
+              isOpen
+              allFonts={store.fonts}
+              onActivateIds={(ids) => store.batchSetActivation(ids, true)}
+              onClose={() => setActiveModal(null)}
+              onNotify={store.showToast}
+            />
+          )}
 
-        <SharedStackModal
-          stack={sharedStack}
-          allFonts={store.fonts}
-          onImportAndActivate={(stackName, fontIds) => {
-            store.createFontList(stackName, '#1b1b1b');
-            store.batchSetActivation(fontIds, true);
-            store.showToast(`Activated ${fontIds.length} fonts from "${stackName}"`);
-          }}
-          onClose={() => setSharedStack(null)}
-        />
+          {sharedStack && (
+            <SharedStackModal
+              stack={sharedStack}
+              allFonts={store.fonts}
+              onImportAndActivate={(stackName, fontIds) => {
+                store.createFontList(stackName, '#1b1b1b');
+                store.batchSetActivation(fontIds, true);
+                store.showToast(`Activated ${fontIds.length} fonts from "${stackName}"`);
+              }}
+              onClose={() => setSharedStack(null)}
+            />
+          )}
+        </Suspense>
 
         {/* Subtle macOS HUD Toast */}
         {store.toast && (

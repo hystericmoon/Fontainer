@@ -29,19 +29,19 @@ interface FontRowProps {
   expanded: boolean;
   inCompare: boolean;
   fontLists: FontList[];
-  onSelect: () => void;
-  onToggleCheck: () => void;
-  onToggleExpand: () => void;
-  onToggleActivate: () => void;
-  onToggleStyleActivate: (styleId: string) => void;
-  onToggleStar: () => void;
-  onToggleCompare: () => void;
-  onAddToList: (listId: string) => void;
-  onRemoveFont?: () => void;
+  onSelect: (id: string) => void;
+  onToggleCheck: (id: string) => void;
+  onToggleExpand: (id: string) => void;
+  onToggleActivate: (id: string) => void;
+  onToggleStyleActivate: (fontId: string, styleId: string) => void;
+  onToggleStar: (id: string) => void;
+  onToggleCompare: (id: string) => void;
+  onAddToList: (listId: string, fontId: string) => void;
+  onRemoveFont?: (id: string) => void;
   onCopyCss: (snippet: string) => void;
 }
 
-export const FontRow: React.FC<FontRowProps> = ({
+const FontRowComponent: React.FC<FontRowProps> = ({
   font,
   libraryName,
   preview,
@@ -134,6 +134,8 @@ export const FontRow: React.FC<FontRowProps> = ({
       }`}
       style={{
         backgroundColor: preview.backgroundColor || undefined,
+        contentVisibility: 'auto',
+        containIntrinsicSize: 'auto 104px',
       }}
     >
       {/* Row Header Bar */}
@@ -143,7 +145,7 @@ export const FontRow: React.FC<FontRowProps> = ({
           <input
             type="checkbox"
             checked={checked}
-            onChange={onToggleCheck}
+            onChange={() => onToggleCheck(font.id)}
             aria-label={`Select ${font.name}`}
             className={`w-3.5 h-3.5 shrink-0 rounded accent-[#1b1b1b] dark:accent-[#f1f1f1] cursor-pointer transition-opacity ${
               checked ? 'opacity-100' : 'opacity-30 group-hover:opacity-100 focus:opacity-100'
@@ -157,14 +159,14 @@ export const FontRow: React.FC<FontRowProps> = ({
               isLabelHidden
               label={font.activated ? `Deactivate ${font.name}` : `Activate ${font.name}`}
               value={font.activated}
-              onChange={() => onToggleActivate()}
+              onChange={() => onToggleActivate(font.id)}
             />
           </div>
 
           {/* Expand Styles Button */}
           <button
             type="button"
-            onClick={onToggleExpand}
+            onClick={() => onToggleExpand(font.id)}
             aria-expanded={expanded}
             aria-label={expanded ? `Collapse ${font.name} styles` : `Expand ${font.name} styles`}
             className="flex items-center gap-1 text-left shrink-0 max-w-[200px] cursor-pointer group/name"
@@ -199,7 +201,7 @@ export const FontRow: React.FC<FontRowProps> = ({
         <div className="flex items-center gap-1 shrink-0 relative">
           <button
             type="button"
-            onClick={onToggleStar}
+            onClick={() => onToggleStar(font.id)}
             aria-label={font.starred ? `Unstar ${font.name}` : `Star ${font.name}`}
             aria-pressed={font.starred}
             title={font.starred ? 'Remove from Starred' : 'Add to Starred'}
@@ -214,7 +216,7 @@ export const FontRow: React.FC<FontRowProps> = ({
 
           <button
             type="button"
-            onClick={onToggleCompare}
+            onClick={() => onToggleCompare(font.id)}
             aria-label={inCompare ? `Remove ${font.name} from Compare` : `Compare ${font.name}`}
             aria-pressed={inCompare}
             title={inCompare ? 'Pinned in Compare' : 'Pin to Compare View'}
@@ -259,7 +261,7 @@ export const FontRow: React.FC<FontRowProps> = ({
                         type="button"
                         role="menuitem"
                         onClick={() => {
-                          onAddToList(list.id);
+                          onAddToList(list.id, font.id);
                           setListMenuOpen(false);
                         }}
                         className="w-full px-3 py-1.5 flex items-center justify-between text-left text-neutral-700 dark:text-neutral-200 hover:bg-[#1b1b1b] hover:text-white dark:hover:bg-[#f1f1f1] dark:hover:text-[#111111] transition-colors cursor-pointer"
@@ -287,7 +289,7 @@ export const FontRow: React.FC<FontRowProps> = ({
           {font.isCustomUpload && onRemoveFont && (
             <button
               type="button"
-              onClick={onRemoveFont}
+              onClick={() => onRemoveFont(font.id)}
               aria-label={`Remove ${font.name}`}
               title="Remove uploaded font"
               className="h-6 w-6 flex items-center justify-center rounded-md text-neutral-400 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-red-500 transition-colors cursor-pointer"
@@ -301,7 +303,7 @@ export const FontRow: React.FC<FontRowProps> = ({
       {/* Main Live Specimen Preview Button (Line / Editorial / UI Card / Poster) */}
       <button
         type="button"
-        onClick={onSelect}
+        onClick={() => onSelect(font.id)}
         aria-label={`Inspect ${font.name}`}
         className="w-full px-4 pt-1 pb-4 text-left block cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1b1b1b] dark:focus-visible:ring-[#f1f1f1]"
       >
@@ -396,7 +398,7 @@ export const FontRow: React.FC<FontRowProps> = ({
                   isLabelHidden
                   label={`${style.activated ? 'Deactivate' : 'Activate'} ${font.name} ${style.name}`}
                   value={style.activated}
-                  onChange={() => onToggleStyleActivate(style.id)}
+                  onChange={() => onToggleStyleActivate(font.id, style.id)}
                 />
               </div>
 
@@ -434,3 +436,5 @@ export const FontRow: React.FC<FontRowProps> = ({
     </article>
   );
 };
+
+export const FontRow = React.memo(FontRowComponent);

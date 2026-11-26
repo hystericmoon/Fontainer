@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Button } from '@astryxdesign/core/Button';
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
 import {
@@ -30,7 +30,9 @@ import {
   ensureGoogleFontLoaded,
   ensureRemoteFontLoaded,
 } from '../utils/fontLoader';
-import { FontPairingAssistant } from './FontPairingAssistant';
+const FontPairingAssistant = lazy(() =>
+  import('./FontPairingAssistant').then((m) => ({ default: m.FontPairingAssistant })),
+);
 
 interface InspectorPanelProps {
   font: FontFamily | null;
@@ -361,16 +363,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         )}
 
         {tab === 'pair' && (
-          <FontPairingAssistant
-            font={font}
-            allFonts={allFonts}
-            preview={preview}
-            theme={theme}
-            onSelectFont={onSelectFont}
-            onComparePair={onComparePair}
-            onToggleActivate={onToggleActivate}
-            onNotify={onNotify}
-          />
+          <Suspense
+            fallback={
+              <div className="p-4 text-[12px] text-neutral-500">Loading pairing assistant…</div>
+            }
+          >
+            <FontPairingAssistant
+              font={font}
+              allFonts={allFonts}
+              preview={preview}
+              theme={theme}
+              onSelectFont={onSelectFont}
+              onComparePair={onComparePair}
+              onToggleActivate={onToggleActivate}
+              onNotify={onNotify}
+            />
+          </Suspense>
         )}
 
         {tab === 'preview' && (

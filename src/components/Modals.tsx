@@ -5,6 +5,7 @@ import { Switch } from '@astryxdesign/core/Switch';
 import {
   AlertTriangle,
   Check,
+  CheckCircle2,
   FolderPlus,
   Plus,
   Search,
@@ -21,7 +22,7 @@ import type {
   SmartRuleField,
   ThemeMode,
 } from '../types/font';
-import { matchesSmartList } from '../utils/fontFilter';
+import { formatFontVersion, matchesSmartList } from '../utils/fontFilter';
 
 const FOLDER_COLORS = ['#1b1b1b', '#34C759', '#FF9500', '#AF52DE', '#FF2D55', '#5AC8FA', '#8E8E93'];
 
@@ -567,102 +568,138 @@ export const PreferencesModal: React.FC<{
   </SheetBackdrop>
 );
 
-/* 6. Duplicate Font Finder Modal (with 1-Click Bulk Resolve by Source) */
+/* 6. Duplicate Font Finder Modal (Real Conflicts Only + 1-Click Resolution) */
 export const DuplicateFinderModal: React.FC<{
   groups: DuplicateGroup[];
   libraries: FontLibrary[];
   onDeactivate: (fontId: string) => void;
   onBulkDeactivate: (fontIds: string[], label?: string) => void;
   onRemove: (fontId: string) => void;
+  onBulkRemove?: (fontIds: string[], label?: string) => void;
   onClose: () => void;
-}> = ({ groups, libraries, onDeactivate, onBulkDeactivate, onRemove, onClose }) => {
+}> = ({ groups, libraries, onDeactivate, onBulkDeactivate, onRemove, onBulkRemove, onClose }) => {
   const getLibName = (id: string) => libraries.find((l) => l.id === id)?.name ?? 'Library';
 
   // Count active duplicate copies per library so users can bulk-deactivate by source in 1 click
-  const libraryDupSummary = useMemo(() => {
-    const counts = new Map<string, { libId: string; libName: string; activeIds: string[]; totalIds: string[] }>();
+  const activeByLibrary = useMemo(() => {
+    const counts = new Map<string, { libId: string; libName: string; activeIds: string[] }>();
     for (const group of groups) {
       for (const font of group.fonts) {
+        if (!font.activated) continue;
         const entry = counts.get(font.libraryId) ?? {
           libId: font.libraryId,
           libName: getLibName(font.libraryId),
           activeIds: [],
-          totalIds: [],
         };
-        entry.totalIds.push(font.id);
-        if (font.activated) entry.activeIds.push(font.id);
+        entry.activeIds.push(font.id);
         counts.set(font.libraryId, entry);
       }
     }
-    return Array.from(counts.values()).sort((a, b) => b.activeIds.length - a.activeIds.length || b.totalIds.length - a.totalIds.length);
+    return Array.from(counts.values()).sort((a, b) => b.activeIds.length - a.activeIds.length);
   }, [groups, libraries]);
 
-  // Smart Keep Best: keeps highest-priority copy per group & collects all other active duplicate IDs
+  // group.fonts is already sorted with the recommended copy to keep at index 0
   const smartExtraActiveIds = useMemo(() => {
-    const priority = (libId: string) => {
-      if (libId === 'lib-local' || libId.startsWith('lib-folder')) return 1;
-      if (libId.startsWith('lib-gdrive')) return 2;
-      if (libId === 'lib-collletttivo' || libId === 'lib-openfoundry' || libId === 'lib-uncut') return 3;
-      if (libId === 'lib-fontshare') return 4;
-      if (libId === 'lib-google') return 5;
-      return 3;
-    };
     const toDeactivate: string[] = [];
     for (const group of groups) {
       const activeInGroup = group.fonts.filter((f) => f.activated);
       if (activeInGroup.length <= 1) continue;
-      const sorted = [...activeInGroup].sort((a, b) => priority(a.libraryId) - priority(b.libraryId));
-      for (let i = 1; i < sorted.length; i += 1) {
-        toDeactivate.push(sorted[i].id);
+      for (let i = 1; i < activeInGroup.length; i += 1) {
+        toDeactivate.push(activeInGroup[i].id);
       }
     }
     return toDeactivate;
   }, [groups]);
 
+  const smartExtraRemovableIds = useMemo(() => {
+    const toRemove: string[] = [];
+    for (const group of groups) {
+      if (group.hasActiveConflict) continue;
+      for (let i = 1; i < group.fonts.length; i += 1) {
+        const font = group.fonts[i];
+        if (font.isCustomUpload || Boolean(font.adobeKitId)) {
+          toRemove.push(font.id);
+        }
+      }
+    }
+    return toRemove;
+  }, [groups]);
+
+  const activeConflictCount = useMemo(
+    () => groups.filter((g) => g.hasActiveConflict).length,
+    [groups],
+  );
+  const inactiveCopyCount = groups.length - activeConflictCount;
+  const hasBulkActions =
+    smartExtraActiveIds.length > 0 ||
+    (Boolean(onBulkRemove) && smartExtraRemovableIds.length > 0) ||
+    activeByLibrary.length > 0;
+
   return (
     <SheetBackdrop title="Duplicate Font Finder" onClose={onClose} width={600}>
       {groups.length === 0 ? (
-        <div className="py-8 text-center">
+        <div className="py-8 px-4 text-center">
+          <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2.5" />
           <p className="text-[14px] font-medium text-[var(--color-text-primary)]">
-            No duplicate font families detected
+            No duplicate conflicts found
           </p>
-          <p className="text-[12px] text-neutral-500 mt-1">
-            All installed fonts across your local and synced libraries have unique family names.
+          <p className="text-[12px] text-neutral-500 dark:text-neutral-400 mt-1.5 max-w-[440px] mx-auto leading-relaxed">
+            None of your active fonts or local/synced libraries have duplicate copies. Free fonts
+            listed in multiple browse catalogs (like Google Fonts &amp; Fontshare) are ignored
+            unless you activate more than one copy.
           </p>
         </div>
       ) : (
         <div className="space-y-4 max-h-[66vh] overflow-y-auto pr-0.5">
-          {/* Bulk Resolve Bar */}
-          <div className="p-3.5 rounded-xl bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] space-y-2.5">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <div className="text-[12.5px] font-semibold text-[var(--color-text-primary)]">
-                  Bulk Resolve ({groups.length} duplicate {groups.length === 1 ? 'family' : 'families'})
-                </div>
-                <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                  Deactivate redundant copies by source in 1 click instead of one-by-one.
-                </p>
-              </div>
-              {smartExtraActiveIds.length > 0 && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  label={`Keep Best Copy (${smartExtraActiveIds.length} off)`}
-                  onClick={() =>
-                    onBulkDeactivate(
-                      smartExtraActiveIds,
-                      `Kept best copy & deactivated ${smartExtraActiveIds.length} active duplicates`,
+          {/* Bulk Resolve Bar (only shown when actionable bulk operations exist) */}
+          {hasBulkActions && (
+            <div className="p-3.5 rounded-xl bg-[#F7F7F7] dark:bg-[#1B1B1B] border border-[var(--color-border)] space-y-2.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <div className="text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+                    Bulk Resolve (
+                    {activeConflictCount > 0 && inactiveCopyCount > 0
+                      ? `${activeConflictCount} active, ${inactiveCopyCount} local`
+                      : `${groups.length} ${groups.length === 1 ? 'conflict' : 'conflicts'}`}
                     )
-                  }
-                />
-              )}
-            </div>
+                  </div>
+                  <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                    Keep the recommended copy in 1 click, or pick which copy to keep below.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {smartExtraActiveIds.length > 0 && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      label={`Keep Best Copy (${smartExtraActiveIds.length} off)`}
+                      onClick={() =>
+                        onBulkDeactivate(
+                          smartExtraActiveIds,
+                          `Kept best copy & deactivated ${smartExtraActiveIds.length} active duplicates`,
+                        )
+                      }
+                    />
+                  )}
+                  {onBulkRemove && smartExtraRemovableIds.length > 0 && (
+                    <Button
+                      variant={smartExtraActiveIds.length === 0 ? 'primary' : 'secondary'}
+                      size="sm"
+                      label={`Remove ${smartExtraRemovableIds.length} Extra ${smartExtraRemovableIds.length === 1 ? 'Copy' : 'Copies'}`}
+                      onClick={() =>
+                        onBulkRemove(
+                          smartExtraRemovableIds,
+                          `Removed ${smartExtraRemovableIds.length} extra duplicate ${smartExtraRemovableIds.length === 1 ? 'copy' : 'copies'}`,
+                        )
+                      }
+                    />
+                  )}
+                </div>
+              </div>
 
-            {libraryDupSummary.some((item) => item.activeIds.length > 0) && (
-              <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-[var(--color-border)]">
-                {libraryDupSummary
-                  .filter((item) => item.activeIds.length > 0)
-                  .map((item) => (
+              {activeByLibrary.length > 0 && (
+                <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-[var(--color-border)]">
+                  {activeByLibrary.map((item) => (
                     <Button
                       key={item.libId}
                       variant="secondary"
@@ -676,61 +713,103 @@ export const DuplicateFinderModal: React.FC<{
                       }
                     />
                   ))}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {groups.map((group) => (
             <div
               key={group.normalizedName}
               className="rounded-xl border border-[var(--color-border)] overflow-hidden"
             >
-              <div className="px-3.5 py-2 bg-[#F7F7F7] dark:bg-[#1B1B1B] border-b border-[var(--color-border)] flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                  <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">
+              <div className="px-3.5 py-2 bg-[#F7F7F7] dark:bg-[#1B1B1B] border-b border-[var(--color-border)] flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      group.hasActiveConflict ? 'text-amber-500' : 'text-neutral-400'
+                    }`}
+                  />
+                  <span className="text-[13px] font-semibold text-[var(--color-text-primary)] truncate">
                     {group.displayName}
                   </span>
                 </div>
-                <span className="text-[11px] text-neutral-500">{group.reason}</span>
+                <span className="text-[11px] text-neutral-500 shrink-0">{group.reason}</span>
               </div>
 
               <div className="divide-y divide-[var(--color-border)]">
-                {group.fonts.map((font) => (
-                  <div
-                    key={font.id}
-                    className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-[12px]"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium text-[var(--color-text-primary)]">
-                        {getLibName(font.libraryId)} · {font.isVariable ? 'Variable' : font.format}
-                      </div>
-                      <div className="text-[11px] font-code tabular-nums text-neutral-500">
-                        v{font.version} · {font.styles.length} styles ·{' '}
-                        {font.activated ? 'Active' : 'Inactive'}
-                      </div>
-                    </div>
+                {group.fonts.map((font, idx) => {
+                  const versionLabel = formatFontVersion(font.version);
+                  const styleLabel = `${font.styles.length} ${font.styles.length === 1 ? 'style' : 'styles'}`;
+                  const otherActiveIds = group.hasActiveConflict
+                    ? group.fonts.filter((f) => f.activated && f.id !== font.id).map((f) => f.id)
+                    : [];
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {font.activated && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          label="Deactivate"
-                          onClick={() => onDeactivate(font.id)}
-                        />
-                      )}
-                      {font.isCustomUpload && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          label="Remove Copy"
-                          onClick={() => onRemove(font.id)}
-                        />
-                      )}
+                  return (
+                    <div
+                      key={font.id}
+                      className="px-3.5 py-2.5 flex items-center justify-between gap-3 text-[12px]"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap font-medium text-[var(--color-text-primary)]">
+                          <span>
+                            {getLibName(font.libraryId)} · {font.isVariable ? 'Variable' : font.format}
+                          </span>
+                          {idx === 0 && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-medium">
+                              Recommended
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] font-code tabular-nums text-neutral-500 mt-0.5">
+                          {versionLabel ? `${versionLabel} · ` : ''}
+                          {styleLabel} ·{' '}
+                          <span
+                            className={
+                              font.activated
+                                ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                                : 'text-neutral-500'
+                            }
+                          >
+                            {font.activated ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {group.hasActiveConflict && font.activated && otherActiveIds.length > 0 && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            label="Keep This"
+                            onClick={() =>
+                              onBulkDeactivate(
+                                otherActiveIds,
+                                `Kept ${getLibName(font.libraryId)} copy of ${group.displayName}`,
+                              )
+                            }
+                          />
+                        )}
+                        {font.activated && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            label="Deactivate"
+                            onClick={() => onDeactivate(font.id)}
+                          />
+                        )}
+                        {(font.isCustomUpload || Boolean(font.adobeKitId)) && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            label="Remove Copy"
+                            onClick={() => onRemove(font.id)}
+                          />
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

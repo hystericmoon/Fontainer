@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Columns2, Star } from 'lucide-react';
 import type { FontFamily, PreviewSettings } from '../types/font';
@@ -33,7 +33,7 @@ const FontGridCard: React.FC<{
   onToggleActivate: (id: string) => void;
   onToggleStar: (id: string) => void;
   onToggleCompare: (id: string) => void;
-}> = ({
+}> = React.memo(({
   font,
   selected,
   inCompare,
@@ -92,6 +92,7 @@ const FontGridCard: React.FC<{
           ? 'border-[#1b1b1b] dark:border-[#f1f1f1] bg-black/[0.02] dark:bg-white/[0.05]'
           : 'border-[var(--color-border)] bg-white dark:bg-[#262626] hover:border-neutral-400 dark:hover:border-neutral-600'
       }`}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 210px' }}
     >
       {/* Card Header */}
       <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-2">
@@ -187,7 +188,7 @@ const FontGridCard: React.FC<{
       </div>
     </article>
   );
-};
+});
 
 export const FontGrid: React.FC<FontGridProps> = ({
   fonts,
@@ -201,6 +202,7 @@ export const FontGrid: React.FC<FontGridProps> = ({
 }) => {
   const featureSettings = buildOpenTypeFeatureSettings(preview.openType);
   const specimenText = preview.text.trim() || 'Typography specimen';
+  const compareIdSet = useMemo(() => new Set(compareIds), [compareIds]);
 
   return (
     <div
@@ -212,7 +214,7 @@ export const FontGrid: React.FC<FontGridProps> = ({
           key={font.id}
           font={font}
           selected={font.id === selectedFontId}
-          inCompare={compareIds.includes(font.id)}
+          inCompare={compareIdSet.has(font.id)}
           preview={preview}
           featureSettings={featureSettings}
           specimenText={specimenText}
